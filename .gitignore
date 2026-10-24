@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.DS_Store
+uploads/*
+!uploads/.gitkeep
+backend/data/*.db-wal
+backend/data/*.db-shm

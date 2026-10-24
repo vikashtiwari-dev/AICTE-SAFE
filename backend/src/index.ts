@@ -13,7 +13,7 @@ import releaseRoutes from './routes/releases';
 import reportRoutes from './routes/reports';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 // Middlewares
 app.use(cors({ origin: true, credentials: true }));
@@ -48,8 +48,8 @@ if (fs.existsSync(frontendDist)) {
 }
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`🚀 AICTE-SAFE Engine running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 AICTE-SAFE Engine running on http://0.0.0.0:${PORT}`);
   startCronJobs();
 });
 

@@ -47,10 +47,12 @@ if (fs.existsSync(frontendDist)) {
   });
 }
 
-// Start server
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 AICTE-SAFE Engine running on http://0.0.0.0:${PORT}`);
-  startCronJobs();
-});
+// Start server if not imported as serverless handler
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 AICTE-SAFE Engine running on http://0.0.0.0:${PORT}`);
+    startCronJobs();
+  });
+}
 
 export default app;

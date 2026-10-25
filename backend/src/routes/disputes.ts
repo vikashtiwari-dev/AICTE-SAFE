@@ -6,12 +6,14 @@ const router = express.Router();
 
 // GET /api/disputes - list all dispute tickets
 router.get('/', authenticate, (req: AuthRequest, res) => {
-  const { status, institution_id } = req.query;
+  const { status, institution_id, fdr_id } = req.query;
   let sql = `
     SELECT d.*, 
+      d.title as subject,
       f.fdr_number, f.bank_name, f.deposit_amount,
       i.name as institution_name, i.aicte_id,
-      u.full_name as creator_name
+      u.full_name as creator_name,
+      u.full_name as created_by_name
     FROM dispute_tickets d
     JOIN fdrs f ON d.fdr_id = f.id
     JOIN institutions i ON d.institution_id = i.id
@@ -26,6 +28,11 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
   } else if (institution_id) {
     sql += ' AND d.institution_id = ?';
     params.push(institution_id);
+  }
+
+  if (fdr_id) {
+    sql += ' AND d.fdr_id = ?';
+    params.push(fdr_id);
   }
 
   if (status) {
@@ -43,11 +50,15 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
 router.get('/:id', authenticate, (req: AuthRequest, res) => {
   const ticket = db.prepare(`
     SELECT d.*, 
+      d.title as subject,
+      u.full_name as creator_name,
+      u.full_name as created_by_name,
       f.fdr_number, f.bank_name, f.deposit_amount, f.verification_status, f.verification_notes,
       i.name as institution_name, i.aicte_id, i.contact_email, i.contact_person
     FROM dispute_tickets d
     JOIN fdrs f ON d.fdr_id = f.id
     JOIN institutions i ON d.institution_id = i.id
+    LEFT JOIN users u ON d.created_by = u.id
     WHERE d.id = ?
   `).get(req.params.id) as any;
 
@@ -66,15 +77,28 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
     ORDER BY created_at ASC
   `).all(req.params.id);
 
-  return res.json({ ticket, messages });
+  return res.json({
+    ...ticket,
+    subject: ticket.title,
+    created_by_name: ticket.creator_name || ticket.created_by_name,
+    messages,
+    ticket: {
+      ...ticket,
+      subject: ticket.title,
+      created_by_name: ticket.creator_name || ticket.created_by_name,
+    }
+  });
 });
 
 // POST /api/disputes - open a dispute ticket
 router.post('/', authenticate, requireRole(['admin', 'bureau_officer']), (req: AuthRequest, res) => {
-  const { fdr_id, title, discrepancy_details, priority = 'High' } = req.body;
+  const fdr_id = req.body.fdr_id;
+  const title = req.body.title || req.body.subject;
+  const discrepancy_details = req.body.discrepancy_details || req.body.initial_comment;
+  const priority = req.body.priority || 'High';
 
   if (!fdr_id || !title || !discrepancy_details) {
-    return res.status(400).json({ error: 'FDR ID, title, and discrepancy details are required' });
+    return res.status(400).json({ error: 'FDR ID, title/subject, and discrepancy details are required' });
   }
 
   const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(fdr_id) as any;

@@ -62,8 +62,8 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
   }
 
   const result = db.prepare(`
-    INSERT INTO release_requests (fdr_id, institution_id, request_type, reason, requested_by, status, remarks)
-    VALUES (?, ?, ?, ?, ?, 'Pending', ?)
+    INSERT INTO release_requests (fdr_id, institution_id, request_type, reason, requested_by, status, review_stage, remarks)
+    VALUES (?, ?, ?, ?, ?, 'Pending', 'Dealing_Officer', ?)
   `).run(fdr_id, fdr.institution_id, request_type, reason, req.user!.userId, remarks || null);
 
   db.prepare(`

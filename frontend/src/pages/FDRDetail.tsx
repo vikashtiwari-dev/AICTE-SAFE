@@ -142,6 +142,17 @@ export const FDRDetail: React.FC = () => {
     }
   };
 
+  const unpackTicket = (data: any): DisputeTicket | null => {
+    if (!data) return null;
+    const base = data.ticket ? { ...data.ticket, messages: data.messages } : data;
+    return {
+      ...base,
+      subject: base.subject || base.title || '',
+      created_by_name: base.created_by_name || base.creator_name || 'AICTE Officer',
+      messages: base.messages || data.messages || [],
+    };
+  };
+
   const fetchDisputes = async () => {
     try {
       const res = await api.get(`/disputes?fdr_id=${id}`);
@@ -149,7 +160,7 @@ export const FDRDetail: React.FC = () => {
       if (res.data.length > 0 && !activeTicket) {
         // Load messages for the first ticket
         const ticketRes = await api.get(`/disputes/${res.data[0].id}`);
-        setActiveTicket(ticketRes.data);
+        setActiveTicket(unpackTicket(ticketRes.data));
       }
     } catch (err) {
       console.error('Error fetching disputes:', err);
@@ -159,7 +170,7 @@ export const FDRDetail: React.FC = () => {
   const selectTicket = async (ticket: DisputeTicket) => {
     try {
       const res = await api.get(`/disputes/${ticket.id}`);
-      setActiveTicket(res.data);
+      setActiveTicket(unpackTicket(res.data));
     } catch (err) {
       console.error(err);
     }
@@ -175,7 +186,7 @@ export const FDRDetail: React.FC = () => {
       });
       setNewMsg('');
       const updated = await api.get(`/disputes/${activeTicket.id}`);
-      setActiveTicket(updated.data);
+      setActiveTicket(unpackTicket(updated.data));
       fetchDisputes();
     } catch (err) {
       console.error(err);
@@ -192,7 +203,7 @@ export const FDRDetail: React.FC = () => {
       fetchDisputes();
       if (activeTicket?.id === ticketId) {
         const updated = await api.get(`/disputes/${ticketId}`);
-        setActiveTicket(updated.data);
+        setActiveTicket(unpackTicket(updated.data));
       }
       fetchFDRDetail();
     } catch (err) {
@@ -207,7 +218,9 @@ export const FDRDetail: React.FC = () => {
     try {
       await api.post('/disputes', {
         fdr_id: id,
+        title: ticketSubject.trim(),
         subject: ticketSubject.trim(),
+        discrepancy_details: ticketComment.trim(),
         initial_comment: ticketComment.trim(),
       });
       setIsNewTicketModalOpen(false);
@@ -863,7 +876,7 @@ export const FDRDetail: React.FC = () => {
                           : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                       }`}
                     >
-                      <span className="truncate max-w-[180px]">{t.subject}</span>
+                      <span className="truncate max-w-[180px]">{t.subject || (t as any).title || `Ticket #${t.id}`}</span>
                       <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
                         t.status === 'Resolved' ? 'bg-emerald-500 text-white' : 'bg-amber-400 text-slate-900'
                       }`}>

@@ -195,13 +195,15 @@ export function initializeDatabase() {
       requested_by INTEGER NOT NULL,
       requested_at TEXT DEFAULT (datetime('now')),
       status TEXT DEFAULT 'Pending',
-      review_stage TEXT DEFAULT 'Dealing_Assistant',
+      review_stage TEXT DEFAULT 'Dealing_Officer',
       dealing_officer_id INTEGER,
       dealing_officer_remarks TEXT,
       dealing_officer_at TEXT,
       finance_officer_id INTEGER,
       finance_officer_remarks TEXT,
       finance_officer_at TEXT,
+      reviewed_by INTEGER,
+      reviewed_at TEXT,
       approved_by INTEGER,
       approved_at TEXT,
       dsc_sign_hash TEXT,
@@ -312,6 +314,38 @@ export function initializeDatabase() {
     } catch {
       // Column already exists
     }
+  }
+
+  // Dynamic Column Migration for Release Requests (reviewed_by, reviewed_at, and stages)
+  const releaseColumns = [
+    'reviewed_by INTEGER',
+    'reviewed_at TEXT',
+    'review_stage TEXT DEFAULT "Dealing_Officer"',
+    'dealing_officer_id INTEGER',
+    'dealing_officer_remarks TEXT',
+    'dealing_officer_at TEXT',
+    'finance_officer_id INTEGER',
+    'finance_officer_remarks TEXT',
+    'finance_officer_at TEXT',
+    'approved_by INTEGER',
+    'approved_at TEXT',
+    'dsc_sign_hash TEXT',
+    'dsc_signer_name TEXT',
+    'dsc_signed_at TEXT'
+  ];
+
+  for (const col of releaseColumns) {
+    try {
+      db.exec(`ALTER TABLE release_requests ADD COLUMN ${col};`);
+    } catch {
+      // Column already exists
+    }
+  }
+
+  try {
+    db.exec(`UPDATE release_requests SET review_stage = 'Dealing_Officer' WHERE review_stage = 'Dealing_Assistant' OR review_stage IS NULL;`);
+  } catch {
+    // Ignore migration catch
   }
 
   // Ensure declared fields are initialized from current values for any unpopulated records

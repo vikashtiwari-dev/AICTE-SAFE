@@ -2,13 +2,15 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import api from '../api/client';
-import { ShieldCheck, Lock, User as UserIcon, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Lock, User as UserIcon, AlertCircle, Building2 } from 'lucide-react';
+import { InstitutionRequestModal } from '../components/InstitutionRequestModal';
 
 export const Login: React.FC = () => {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin123');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
 
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -111,6 +113,18 @@ export const Login: React.FC = () => {
             </button>
           </form>
 
+          {/* Onboarding Request CTA */}
+          <div className="mt-4 pt-4 border-t border-slate-100 text-center">
+            <button
+              type="button"
+              onClick={() => setIsOnboardingModalOpen(true)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:text-blue-800 transition-colors"
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>New Institution? Submit Onboarding Request</span>
+            </button>
+          </div>
+
           {/* Demo Credentials Pill Selectors */}
           <div className="mt-8 pt-6 border-t border-slate-100">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3 text-center">
@@ -158,6 +172,12 @@ export const Login: React.FC = () => {
           Official Portal • All India Council for Technical Education, Ministry of Education, Govt. of India
         </p>
       </div>
+
+      {/* Onboarding Modal */}
+      <InstitutionRequestModal
+        isOpen={isOnboardingModalOpen}
+        onClose={() => setIsOnboardingModalOpen(false)}
+      />
     </div>
   );
 };

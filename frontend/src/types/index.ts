@@ -63,6 +63,26 @@ export interface Institution {
   fdrs?: FDR[];
 }
 
+export interface InstitutionRequest {
+  id: number;
+  aicte_id: string;
+  name: string;
+  institution_type: string;
+  state?: string;
+  city?: string;
+  address?: string;
+  contact_person?: string;
+  contact_email: string;
+  contact_phone?: string;
+  justification?: string;
+  status: 'Pending' | 'Approved' | 'Rejected';
+  requested_at: string;
+  reviewed_by?: number;
+  reviewed_at?: string;
+  reviewer_name?: string;
+  remarks?: string;
+}
+
 export interface Alert {
   id: number;
   fdr_id: number;

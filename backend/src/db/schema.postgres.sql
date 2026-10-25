@@ -98,6 +98,25 @@ CREATE TABLE IF NOT EXISTS release_requests (
   remarks TEXT
 );
 
+CREATE TABLE IF NOT EXISTS institution_requests (
+  id SERIAL PRIMARY KEY,
+  aicte_id VARCHAR(100) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  institution_type VARCHAR(100) DEFAULT 'Engineering',
+  state VARCHAR(100),
+  city VARCHAR(100),
+  address TEXT,
+  contact_person VARCHAR(255),
+  contact_email VARCHAR(255) NOT NULL,
+  contact_phone VARCHAR(50),
+  justification TEXT,
+  status VARCHAR(50) DEFAULT 'Pending',
+  requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  reviewed_by INTEGER REFERENCES users(id),
+  reviewed_at TIMESTAMP,
+  remarks TEXT
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id SERIAL PRIMARY KEY,
   entity_type VARCHAR(50) NOT NULL,

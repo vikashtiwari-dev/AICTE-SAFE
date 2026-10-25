@@ -168,6 +168,25 @@ export function initializeDatabase() {
       remarks TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS institution_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      aicte_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      institution_type TEXT DEFAULT 'Engineering',
+      state TEXT,
+      city TEXT,
+      address TEXT,
+      contact_person TEXT,
+      contact_email TEXT NOT NULL,
+      contact_phone TEXT,
+      justification TEXT,
+      status TEXT DEFAULT 'Pending',
+      requested_at TEXT DEFAULT (datetime('now')),
+      reviewed_by INTEGER,
+      reviewed_at TEXT,
+      remarks TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       entity_type TEXT NOT NULL,

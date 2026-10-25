@@ -41,6 +41,25 @@ export interface FDR {
   contact_email?: string;
   documents?: FDRDocument[];
   audit?: AuditLogEntry[];
+  declared_deposit_amount?: number;
+  bank_confirmed_amount?: number;
+  declared_maturity_date?: string;
+  bank_confirmed_maturity_date?: string;
+  declared_bank_branch?: string;
+  bank_confirmed_branch?: string;
+  declared_ifsc?: string;
+  bank_confirmed_ifsc?: string;
+  declared_account_number?: string;
+  bank_confirmed_account_number?: string;
+  declared_joint_holder?: string;
+  bank_confirmed_joint_holder?: string;
+  bank_confirmation_ref?: string;
+  bank_confirmation_date?: string;
+  bank_officer_name?: string;
+  bank_officer_designation?: string;
+  mismatch_detected?: number;
+  discrepancy_fields?: string | string[];
+  last_reconciliation_at?: string;
 }
 
 export interface Institution {

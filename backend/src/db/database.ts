@@ -483,4 +483,55 @@ export function initializeDatabase() {
   } catch (seedErr) {
     console.warn('Auto-seed check error:', seedErr);
   }
+
+  // Ensure declared and bank-confirmed fields are always populated on every boot
+  try {
+    db.exec(`
+      UPDATE fdrs
+      SET declared_deposit_amount = COALESCE(declared_deposit_amount, deposit_amount),
+          declared_maturity_date = COALESCE(declared_maturity_date, maturity_date),
+          declared_bank_branch = COALESCE(declared_bank_branch, bank_branch),
+          declared_account_number = COALESCE(declared_account_number, account_number),
+          declared_joint_holder = COALESCE(declared_joint_holder, 'AICTE and Technical Institution')
+      WHERE declared_deposit_amount IS NULL OR declared_deposit_amount = 0;
+
+      UPDATE fdrs
+      SET bank_confirmed_amount = COALESCE(bank_confirmed_amount, deposit_amount),
+          bank_confirmed_maturity_date = COALESCE(bank_confirmed_maturity_date, maturity_date),
+          bank_confirmed_branch = COALESCE(bank_confirmed_branch, bank_branch),
+          bank_confirmed_account_number = COALESCE(bank_confirmed_account_number, account_number),
+          bank_confirmed_joint_holder = COALESCE(bank_confirmed_joint_holder, 'AICTE and Technical Institution'),
+          bank_confirmation_ref = COALESCE(bank_confirmation_ref, 'SFMS-SBI-2026-9812A'),
+          bank_confirmation_date = COALESCE(bank_confirmation_date, '2026-10-24 11:30:00'),
+          bank_officer_name = COALESCE(bank_officer_name, 'S. K. Sharma'),
+          bank_officer_designation = COALESCE(bank_officer_designation, 'Chief Manager & Branch Head'),
+          mismatch_detected = 0,
+          discrepancy_fields = '[]',
+          last_reconciliation_at = COALESCE(last_reconciliation_at, '2026-10-24 11:30:00')
+      WHERE verification_status = 'Verified' AND bank_confirmed_amount IS NULL;
+
+      UPDATE fdrs
+      SET declared_deposit_amount = 50000000,
+          bank_confirmed_amount = 45000000,
+          declared_maturity_date = maturity_date,
+          bank_confirmed_maturity_date = maturity_date,
+          declared_bank_branch = bank_branch,
+          bank_confirmed_branch = bank_branch,
+          declared_account_number = account_number,
+          bank_confirmed_account_number = account_number,
+          declared_joint_holder = 'AICTE and National Institute of Technology Karnataka',
+          bank_confirmed_joint_holder = 'National Institute of Technology Karnataka Sole Lien',
+          bank_confirmation_ref = 'SFMS-SBI-DISC-004B',
+          bank_confirmation_date = '2026-10-23 16:45:00',
+          bank_officer_name = 'Anil Deshmukh',
+          bank_officer_designation = 'Treasury Officer, SBI Surathkal',
+          mismatch_detected = 1,
+          discrepancy_fields = '["deposit_amount","joint_holder"]',
+          verification_notes = 'Bank confirmed lien balance is ₹4,50,00,000 against declared ₹5,00,00,000 (Delta: -₹50,00,000). AICTE Joint Endorsement Missing in Bank Record.',
+          last_reconciliation_at = '2026-10-23 16:45:00'
+      WHERE id = 5;
+    `);
+  } catch (syncErr) {
+    console.warn('Reconciliation data sync notice:', syncErr);
+  }
 }

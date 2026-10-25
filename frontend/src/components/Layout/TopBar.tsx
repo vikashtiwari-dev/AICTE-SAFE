@@ -1,6 +1,7 @@
 import React from 'react';
-import { Bell, ShieldCheck } from 'lucide-react';
+import { Bell, ShieldCheck, Languages } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
+import { useLanguage } from '../../context/LanguageContext';
 import { Link } from 'react-router-dom';
 
 interface TopBarProps {
@@ -9,6 +10,7 @@ interface TopBarProps {
 
 export const TopBar: React.FC<TopBarProps> = ({ title = 'Portal' }) => {
   const { user } = useAuth();
+  const { language, setLanguage, t } = useLanguage();
 
   return (
     <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between sticky top-0 z-30 shadow-sm">
@@ -17,10 +19,34 @@ export const TopBar: React.FC<TopBarProps> = ({ title = 'Portal' }) => {
       </div>
 
       <div className="flex items-center gap-4">
+        {/* Language Switcher (GIGW Compliant: English / Hindi) */}
+        <div className="flex items-center bg-slate-100 rounded-lg p-0.5 border border-slate-200 text-xs font-semibold">
+          <button
+            onClick={() => setLanguage('en')}
+            className={`px-2.5 py-1 rounded transition-colors ${
+              language === 'en'
+                ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            English
+          </button>
+          <button
+            onClick={() => setLanguage('hi')}
+            className={`px-2.5 py-1 rounded transition-colors ${
+              language === 'hi'
+                ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            हिंदी
+          </button>
+        </div>
+
         {/* Verification indicator */}
         <div className="hidden md:flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-800 px-3 py-1.5 rounded-full text-xs font-medium">
           <ShieldCheck className="w-4 h-4 text-blue-600" />
-          <span>SAFE Engine • AICTE Regulation Bureau</span>
+          <span>{language === 'hi' ? 'सेफ इंजन • विनियमन ब्यूरो' : 'SAFE Engine • AICTE Regulation Bureau'}</span>
         </div>
 
         {/* Alerts Bell */}

@@ -146,6 +146,8 @@ export function initializeDatabase() {
       file_path TEXT NOT NULL,
       file_size INTEGER,
       mime_type TEXT,
+      sha256_hash TEXT,
+      verified_on_chain INTEGER DEFAULT 1,
       uploaded_by INTEGER,
       uploaded_at TEXT DEFAULT (datetime('now')),
       is_active INTEGER DEFAULT 1
@@ -174,11 +176,57 @@ export function initializeDatabase() {
       requested_by INTEGER NOT NULL,
       requested_at TEXT DEFAULT (datetime('now')),
       status TEXT DEFAULT 'Pending',
-      reviewed_by INTEGER,
-      reviewed_at TEXT,
+      review_stage TEXT DEFAULT 'Dealing_Assistant',
+      dealing_officer_id INTEGER,
+      dealing_officer_remarks TEXT,
+      dealing_officer_at TEXT,
+      finance_officer_id INTEGER,
+      finance_officer_remarks TEXT,
+      finance_officer_at TEXT,
       approved_by INTEGER,
       approved_at TEXT,
+      dsc_sign_hash TEXT,
+      dsc_signer_name TEXT,
+      dsc_signed_at TEXT,
       remarks TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS dispute_tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fdr_id INTEGER NOT NULL,
+      institution_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      discrepancy_details TEXT NOT NULL,
+      status TEXT DEFAULT 'Open',
+      priority TEXT DEFAULT 'High',
+      created_by INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      resolved_at TEXT,
+      resolved_by INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS dispute_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticket_id INTEGER NOT NULL,
+      sender_id INTEGER NOT NULL,
+      sender_role TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      message TEXT NOT NULL,
+      attachment_url TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      institution_id INTEGER NOT NULL,
+      fdr_id INTEGER NOT NULL,
+      channel TEXT NOT NULL,
+      recipient_role TEXT NOT NULL,
+      recipient_contact TEXT NOT NULL,
+      message_body TEXT NOT NULL,
+      days_before_maturity INTEGER NOT NULL,
+      delivery_status TEXT DEFAULT 'Delivered',
+      sent_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS institution_requests (
@@ -288,6 +336,42 @@ export function initializeDatabase() {
           INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
           VALUES (5, 5, 'Discrepancy', 'Critical', 'Bank discrepancy flagged for FDR-NITK-2024-001: Declared amount does not match core verification.', '2026-10-20')
         `).run();
+
+        // Seed sample dispute ticket & clarification thread
+        db.prepare(`
+          INSERT INTO dispute_tickets (id, fdr_id, institution_id, title, discrepancy_details, status, priority, created_by)
+          VALUES (1, 5, 5, 'Discrepancy: Declared Deposit Amount Mismatch', 'Bank confirmation response states actual lien balance is ₹4,50,00,000 instead of ₹5,00,00,000 declared on portal.', 'Open', 'Critical', 2)
+        `).run();
+
+        db.prepare(`
+          INSERT INTO dispute_messages (ticket_id, sender_id, sender_role, sender_name, message)
+          VALUES (1, 2, 'bureau_officer', 'Rajesh Verma (Bureau Officer)', 'Notice issued under Section 10(k) AICTE Act: Please provide a bank reconciliation certificate and stamped copy of the FDR from State Bank of India Surathkal Branch.')
+        `).run();
+
+        db.prepare(`
+          INSERT INTO dispute_messages (ticket_id, sender_id, sender_role, sender_name, message)
+          VALUES (1, 3, 'institution_user', 'NITK Accounts Officer', 'We have contacted SBI Surathkal branch. The supplemental guarantee of ₹50,00,000 was executed under sub-lien receipt #SBIN005678902. Uploading joint certificate for Council review.')
+        `).run();
+
+        // Seed sample release request with multi-tier workflow
+        db.prepare(`
+          INSERT INTO release_requests (id, fdr_id, institution_id, request_type, reason, requested_by, status, review_stage, dealing_officer_id, dealing_officer_remarks, dealing_officer_at)
+          VALUES (1, 6, 6, 'Release', 'Permanent completion of initial 10-year regulatory guarantee period as per APH norms.', 3, 'Under Review', 'Finance_Officer', 2, 'Verified bank discharge certificate & no dues from Regional Office. Recommended for Finance Officer & Director approval.', '2026-10-24 14:30:00')
+        `).run();
+
+        // Seed sample multi-channel notifications
+        const nudges = [
+          [4, 4, 'WhatsApp', 'Principal', '+91 94433 12345', 'AICTE URGENT: FDR FDR-NITT-2024-001 is maturing in 5 days. Please initiate renewal to maintain APH compliance.', 5, 'Delivered'],
+          [4, 4, 'Email', 'Accounts_Officer', 'accounts@nitt.edu', 'AICTE Statutory Notice: Mandatory regulatory FDR expiring soon. Immediate council lien renewal required.', 15, 'Delivered'],
+          [4, 4, 'SMS', 'Chairman', '+91 98401 54321', 'AICTE Alert: Security deposit FDR-NITT-2024-001 maturity notification. Check portal for renewal.', 30, 'Delivered'],
+          [5, 5, 'WhatsApp', 'Principal', '+91 98800 67890', 'AICTE Compliance: Discrepancy flagged on instrument FDR-NITK-2024-001. Please submit clarification within 7 days.', 7, 'Delivered'],
+        ];
+        for (const n of nudges) {
+          db.prepare(`
+            INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(...n);
+        }
       }
       console.log('✅ Auto-seed completed successfully');
     }

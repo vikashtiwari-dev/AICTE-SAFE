@@ -13,6 +13,11 @@ import {
   AlertCircle,
   Check,
   Eye,
+  ShieldCheck,
+  FileSignature,
+  KeyRound,
+  UserCheck,
+  CheckCheck,
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
@@ -28,6 +33,18 @@ export const Releases: React.FC = () => {
   const [reviewRemarks, setReviewRemarks] = useState('');
   const [reviewLoading, setReviewLoading] = useState(false);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+
+  // Multi-Tier Maker-Checker State
+  const [isTierModalOpen, setIsTierModalOpen] = useState(false);
+  const [tierStage, setTierStage] = useState<'Finance_Officer' | 'Director_Approval'>('Finance_Officer');
+  const [tierRemarks, setTierRemarks] = useState('');
+  const [tierLoading, setTierLoading] = useState(false);
+
+  // DSC Digital Signature State
+  const [isDscModalOpen, setIsDscModalOpen] = useState(false);
+  const [dscSignerName, setDscSignerName] = useState('Director, AICTE Regulation Bureau');
+  const [dscPin, setDscPin] = useState('883921');
+  const [dscSigning, setDscSigning] = useState(false);
 
   useEffect(() => {
     fetchReleases();
@@ -63,6 +80,42 @@ export const Releases: React.FC = () => {
       console.error(err);
     } finally {
       setReviewLoading(false);
+    }
+  };
+
+  const handleTierSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedReq) return;
+    setTierLoading(true);
+    try {
+      await api.patch(`/releases/${selectedReq.id}/tier-review`, {
+        stage: tierStage,
+        remarks: tierRemarks,
+      });
+      setIsTierModalOpen(false);
+      fetchReleases();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTierLoading(false);
+    }
+  };
+
+  const handleDscSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedReq) return;
+    setDscSigning(true);
+    try {
+      await api.post(`/releases/${selectedReq.id}/dsc-sign`, {
+        signer_name: dscSignerName,
+        pin: dscPin,
+      });
+      setIsDscModalOpen(false);
+      fetchReleases();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setDscSigning(false);
     }
   };
 
@@ -126,8 +179,8 @@ export const Releases: React.FC = () => {
                 <th className="py-3 px-4">Request Ref / FDR</th>
                 <th className="py-3 px-4">Technical Institution</th>
                 <th className="py-3 px-4">Action Requested</th>
-                <th className="py-3 px-4">Justification & Regulatory Reason</th>
-                <th className="py-3 px-4">Current Workflow Stage</th>
+                <th className="py-3 px-4">Maker-Checker Approval Pipeline</th>
+                <th className="py-3 px-4">Current Status & Legal DSC</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -147,82 +200,294 @@ export const Releases: React.FC = () => {
                   </td>
                 </tr>
               ) : (
-                requests.map((req) => (
-                  <tr key={req.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="py-3.5 px-4">
-                      <Link to={`/fdrs/${req.fdr_id}`} className="font-bold text-blue-700 hover:text-blue-900">
-                        {req.fdr_number}
-                      </Link>
-                      <span className="text-[10px] text-slate-400 block mt-0.5">
-                        Amount: {formatCurrency(req.deposit_amount)}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <p className="font-semibold text-slate-800">{req.institution_name}</p>
-                      <span className="text-[10px] text-slate-400">{req.aicte_id}</span>
-                    </td>
-                    <td className="py-3.5 px-4 font-semibold text-slate-700">
-                      {req.request_type}
-                    </td>
-                    <td className="py-3.5 px-4 max-w-xs">
-                      <p className="line-clamp-2 text-slate-700">{req.reason}</p>
-                      {req.remarks && (
-                        <p className="text-[10px] text-blue-600 mt-0.5 font-medium">Remarks: {req.remarks}</p>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <Badge status={req.status} />
-                      <span className="text-[10px] text-slate-400 block mt-0.5">
-                        {req.status === 'Completed'
-                          ? `Discharged`
-                          : req.approved_by_name
-                          ? `Approved by ${req.approved_by_name}`
-                          : req.requested_at}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <Link
-                          to={`/fdrs/${req.fdr_id}`}
-                          className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded"
-                          title="View Instrument"
-                        >
-                          <Eye className="w-4 h-4" />
+                requests.map((req) => {
+                  const stage = req.review_stage || (req.status === 'Completed' ? 'Completed' : 'Dealing_Officer');
+                  return (
+                    <tr key={req.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3.5 px-4">
+                        <Link to={`/fdrs/${req.fdr_id}`} className="font-bold text-blue-700 hover:text-blue-900">
+                          {req.fdr_number}
                         </Link>
+                        <span className="text-[10px] text-slate-400 block mt-0.5">
+                          Amount: {formatCurrency(req.deposit_amount)}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <p className="font-semibold text-slate-800">{req.institution_name}</p>
+                        <span className="text-[10px] text-slate-400">{req.aicte_id}</span>
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className="font-semibold text-slate-700">{req.request_type}</span>
+                        <p className="text-[10px] text-slate-400 truncate max-w-[140px] mt-0.5">{req.reason}</p>
+                      </td>
 
-                        {isBureauOrAdmin && req.status !== 'Completed' && req.status !== 'Rejected' && (
-                          <>
-                            <button
-                              onClick={() => {
-                                setSelectedReq(req);
-                                setReviewStatus(req.status === 'Pending' ? 'Under Review' : 'Approved');
-                                setReviewRemarks(req.remarks || '');
-                                setIsReviewModalOpen(true);
-                              }}
-                              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded text-[11px] font-semibold"
-                            >
-                              Review
-                            </button>
+                      {/* Multi-Tier Maker-Checker Pipeline Stepper */}
+                      <td className="py-3.5 px-4 min-w-[260px]">
+                        <div className="flex items-center gap-1.5 text-[10px]">
+                          {/* Tier 1: Maker (College) */}
+                          <div className="flex items-center gap-1 text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            <Check className="w-3 h-3" />
+                            <span>Maker</span>
+                          </div>
+                          <span className="text-slate-300">→</span>
 
-                            {req.status === 'Approved' && (
-                              <button
-                                onClick={() => handleCompleteDischarge(req.id)}
-                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-semibold"
-                              >
-                                Execute Discharge
-                              </button>
+                          {/* Tier 2: Dealing Assistant */}
+                          <div className={`flex items-center gap-1 px-2 py-0.5 rounded border font-semibold ${
+                            stage === 'Finance_Officer' || stage === 'Director_Approval' || stage === 'Completed'
+                              ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                              : stage === 'Dealing_Officer'
+                              ? 'text-blue-700 bg-blue-50 border-blue-200 animate-pulse'
+                              : 'text-slate-400 bg-slate-50 border-slate-200'
+                          }`}>
+                            {stage === 'Finance_Officer' || stage === 'Director_Approval' || stage === 'Completed' ? (
+                              <Check className="w-3 h-3" />
+                            ) : (
+                              <Clock className="w-3 h-3" />
                             )}
-                          </>
+                            <span>Dealing Asst</span>
+                          </div>
+                          <span className="text-slate-300">→</span>
+
+                          {/* Tier 3: Finance Officer */}
+                          <div className={`flex items-center gap-1 px-2 py-0.5 rounded border font-semibold ${
+                            stage === 'Director_Approval' || stage === 'Completed'
+                              ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                              : stage === 'Finance_Officer'
+                              ? 'text-amber-700 bg-amber-50 border-amber-200 animate-pulse'
+                              : 'text-slate-400 bg-slate-50 border-slate-200'
+                          }`}>
+                            {stage === 'Director_Approval' || stage === 'Completed' ? (
+                              <Check className="w-3 h-3" />
+                            ) : (
+                              <Clock className="w-3 h-3" />
+                            )}
+                            <span>Finance Off</span>
+                          </div>
+                          <span className="text-slate-300">→</span>
+
+                          {/* Tier 4: Director DSC */}
+                          <div className={`flex items-center gap-1 px-2 py-0.5 rounded border font-semibold ${
+                            stage === 'Completed' || req.dsc_sign_hash
+                              ? 'text-purple-700 bg-purple-50 border-purple-200'
+                              : stage === 'Director_Approval'
+                              ? 'text-rose-700 bg-rose-50 border-rose-200 font-bold animate-pulse'
+                              : 'text-slate-400 bg-slate-50 border-slate-200'
+                          }`}>
+                            <FileSignature className="w-3 h-3" />
+                            <span>Director DSC</span>
+                          </div>
+                        </div>
+
+                        {req.dealing_officer_remarks && (
+                          <p className="text-[10px] text-slate-500 mt-1 italic">
+                            Dealing: "{req.dealing_officer_remarks}"
+                          </p>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                        {req.finance_officer_remarks && (
+                          <p className="text-[10px] text-slate-500 italic">
+                            Finance: "{req.finance_officer_remarks}"
+                          </p>
+                        )}
+                      </td>
+
+                      {/* Status & DSC Stamp */}
+                      <td className="py-3.5 px-4">
+                        <Badge status={req.status} />
+                        {req.dsc_sign_hash ? (
+                          <div className="mt-1.5 flex flex-col gap-0.5">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-mono text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200 w-fit">
+                              <ShieldCheck className="w-3 h-3 text-purple-600" />
+                              {req.dsc_sign_hash}
+                            </span>
+                            <span className="text-[9px] text-slate-400">
+                              Digitally signed by {req.dsc_signer_name || 'Director'}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[10px] text-slate-400 block mt-0.5">
+                            Stage: {stage.replace('_', ' ')}
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Link
+                            to={`/fdrs/${req.fdr_id}`}
+                            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded"
+                            title="View Instrument"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Link>
+
+                          {isBureauOrAdmin && req.status !== 'Completed' && req.status !== 'Rejected' && (
+                            <>
+                              {/* Advance to next tier button */}
+                              {stage === 'Dealing_Officer' && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedReq(req);
+                                    setTierStage('Finance_Officer');
+                                    setTierRemarks('Documents scrutinized per APH norms; forwarded to Finance Officer.');
+                                    setIsTierModalOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-semibold transition-colors"
+                                >
+                                  Scrutiny Clear →
+                                </button>
+                              )}
+
+                              {stage === 'Finance_Officer' && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedReq(req);
+                                    setTierStage('Director_Approval');
+                                    setTierRemarks('Bank clearance verified; lien balance reconciled.');
+                                    setIsTierModalOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-[11px] font-semibold transition-colors"
+                                >
+                                  Finance Clear →
+                                </button>
+                              )}
+
+                              {stage === 'Director_Approval' && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedReq(req);
+                                    setIsDscModalOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-purple-700 hover:bg-purple-800 text-white rounded text-[11px] font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                                >
+                                  <FileSignature className="w-3.5 h-3.5" />
+                                  <span>Sign with DSC</span>
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Multi-Tier Progression Modal */}
+      <Modal
+        isOpen={isTierModalOpen}
+        onClose={() => setIsTierModalOpen(false)}
+        title="Multi-Tier Maker-Checker Forwarding"
+      >
+        <form onSubmit={handleTierSubmit} className="space-y-4">
+          <p className="text-xs text-slate-500">
+            Forwarding Release Request for instrument <span className="font-semibold text-slate-800">{selectedReq?.fdr_number}</span> to the next administrative tier.
+          </p>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Target Review Tier</label>
+            <input
+              type="text"
+              readOnly
+              value={tierStage === 'Finance_Officer' ? 'Tier 2: AICTE Finance Officer Audit' : 'Tier 3: Director Competent Authority Approval'}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs bg-slate-50 text-slate-700 font-semibold"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              Scrutiny Observations & Recommendations <span className="text-rose-500">*</span>
+            </label>
+            <textarea
+              required
+              rows={3}
+              value={tierRemarks}
+              onChange={(e) => setTierRemarks(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsTierModalOpen(false)}
+              className="px-3 py-1.5 border border-slate-200 text-slate-600 text-xs rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={tierLoading}
+              className="px-4 py-1.5 bg-blue-600 text-white font-semibold text-xs rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              {tierLoading ? 'Forwarding...' : 'Approve & Forward to Next Tier'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* DSC Digital Signature Modal */}
+      <Modal
+        isOpen={isDscModalOpen}
+        onClose={() => setIsDscModalOpen(false)}
+        title="Digital Signature Certificate (DSC) / e-Sign Authorization"
+      >
+        <form onSubmit={handleDscSubmit} className="space-y-4">
+          <div className="p-3 bg-purple-50 border border-purple-200 rounded-xl space-y-1 text-xs text-purple-900">
+            <div className="flex items-center gap-1.5 font-bold">
+              <KeyRound className="w-4 h-4 text-purple-700" />
+              <span>GIGW / IT Act 2000 Section 3A Digital Sealing</span>
+            </div>
+            <p className="text-[11px] text-purple-700">
+              Applying a cryptographic digital signature provides non-repudiation and legal finality for the release of FDR #{selectedReq?.fdr_number} (Amount: {formatCurrency(selectedReq?.deposit_amount)}).
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Signatory Authority Name</label>
+            <input
+              type="text"
+              required
+              value={dscSignerName}
+              onChange={(e) => setDscSignerName(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-medium"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">Hardware Token PIN / e-Sign OTP</label>
+            <input
+              type="password"
+              required
+              value={dscPin}
+              onChange={(e) => setDscPin(e.target.value)}
+              placeholder="Enter 6-digit cryptographic token PIN"
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono tracking-widest"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsDscModalOpen(false)}
+              className="px-3 py-1.5 border border-slate-200 text-slate-600 text-xs rounded-lg"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={dscSigning}
+              className="px-4 py-1.5 bg-purple-700 hover:bg-purple-800 text-white font-semibold text-xs rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              <FileSignature className="w-3.5 h-3.5" />
+              <span>{dscSigning ? 'Sealing Cryptographic Certificate...' : 'Execute DSC Seal & Discharge'}</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Scrutiny & Approval Modal */}
       <Modal

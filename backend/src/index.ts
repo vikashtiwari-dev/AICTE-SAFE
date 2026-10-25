@@ -11,6 +11,8 @@ import institutionRoutes from './routes/institutions';
 import alertRoutes from './routes/alerts';
 import releaseRoutes from './routes/releases';
 import reportRoutes from './routes/reports';
+import disputeRoutes from './routes/disputes';
+import notificationRoutes from './routes/notifications';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -33,6 +35,8 @@ app.use('/api/institutions', institutionRoutes);
 app.use('/api/alerts', alertRoutes);
 app.use('/api/releases', releaseRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/disputes', disputeRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

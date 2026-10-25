@@ -124,6 +124,16 @@ export interface ReleaseRequest {
   approved_by_name?: string;
   approved_at?: string;
   remarks?: string;
+  review_stage?: 'Dealing_Officer' | 'Finance_Officer' | 'Director_Approval' | 'Completed';
+  dealing_officer_status?: string;
+  dealing_officer_remarks?: string;
+  dealing_officer_at?: string;
+  finance_officer_status?: string;
+  finance_officer_remarks?: string;
+  finance_officer_at?: string;
+  dsc_sign_hash?: string;
+  dsc_signer_name?: string;
+  dsc_signed_at?: string;
 }
 
 export interface FDRDocument {
@@ -138,6 +148,8 @@ export interface FDRDocument {
   uploaded_by_name?: string;
   uploaded_at: string;
   is_active: number;
+  sha256_hash?: string;
+  verified_on_chain?: number;
 }
 
 export interface AuditLogEntry {
@@ -167,4 +179,65 @@ export interface DashboardSummary {
   discrepancy_count: number;
   unresolved_alerts_count: number;
   pending_releases_count: number;
+}
+
+export interface DisputeMessage {
+  id: number;
+  ticket_id: number;
+  sender_id: number;
+  sender_name?: string;
+  sender_role?: string;
+  message: string;
+  attachment_url?: string;
+  created_at: string;
+}
+
+export interface DisputeTicket {
+  id: number;
+  fdr_id: number;
+  fdr_number?: string;
+  institution_id: number;
+  institution_name?: string;
+  subject: string;
+  status: 'Open' | 'Under Review' | 'Resolved';
+  created_by: number;
+  created_by_name?: string;
+  created_at: string;
+  resolved_at?: string;
+  resolution_notes?: string;
+  messages?: DisputeMessage[];
+}
+
+export interface NotificationLog {
+  id: number;
+  fdr_id: number;
+  institution_id: number;
+  channel: 'WhatsApp' | 'SMS' | 'Email';
+  recipient_role: string;
+  recipient_contact: string;
+  message: string;
+  trigger_days: number;
+  delivery_status: 'Delivered' | 'Pending' | 'Failed';
+  sent_at: string;
+  fdr_number?: string;
+  institution_name?: string;
+}
+
+export interface ComplianceHealth {
+  institution_id: number;
+  institution_name: string;
+  health_score: number;
+  grade: string;
+  aph_status: string;
+  statutory_penalty_amount: number;
+  infractions: string[];
+  action_items: string[];
+  evaluated_at: string;
+}
+
+export interface MacroAnalytics {
+  bankDistribution: Array<{ bank_name: string; count: number; total_amount: number }>;
+  quarterlyForecast: Array<{ quarter: string; projected_releases: number; projected_amount: number; risk_level: string }>;
+  totalLockedCapital: number;
+  activeInstruments: number;
 }

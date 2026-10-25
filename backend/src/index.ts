@@ -19,8 +19,9 @@ const PORT = Number(process.env.PORT) || 3001;
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-// Serve uploaded documents statically
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Serve uploaded documents statically (supporting /tmp on Vercel)
+const uploadsDir = process.env.VERCEL ? path.join('/tmp', 'uploads') : path.join(__dirname, '../uploads');
+app.use('/uploads', express.static(uploadsDir));
 
 // Initialize DB schema
 initializeDatabase();

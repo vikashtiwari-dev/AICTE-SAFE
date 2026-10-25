@@ -25,11 +25,24 @@ let dbInstance: DBInterface | null = null;
 export function createDB(): DBInterface {
   const dbUrl = process.env.DATABASE_URL;
 
-  // Embedded SQLite driver
-  const DB_PATH = path.join(__dirname, '../../data/aicte_fdr.db');
+  // Embedded SQLite driver (supporting ephemeral /tmp on Vercel Serverless)
+  const DB_PATH = process.env.VERCEL
+    ? path.join('/tmp', 'aicte_fdr.db')
+    : path.join(__dirname, '../../data/aicte_fdr.db');
   const dataDir = path.dirname(DB_PATH);
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
+  }
+
+  if (process.env.VERCEL) {
+    const bundledDb = path.join(__dirname, '../../data/aicte_fdr.db');
+    if (fs.existsSync(bundledDb) && !fs.existsSync(DB_PATH)) {
+      try {
+        fs.copyFileSync(bundledDb, DB_PATH);
+      } catch (e) {
+        console.warn('Could not copy bundled SQLite database to /tmp', e);
+      }
+    }
   }
 
   const sqlite = new DatabaseSync(DB_PATH);

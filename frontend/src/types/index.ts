@@ -39,27 +39,18 @@ export interface FDR {
   days_to_maturity?: number;
   contact_person?: string;
   contact_email?: string;
+  raw_account_number?: string;
+  lock_in_years?: number;
+  aph_programme?: string;
+  lock_in_eligibility?: {
+    eligible_for_release: boolean;
+    years_served: number;
+    lock_in_mandatory_years: number;
+    years_remaining: number;
+    warning?: string | null;
+  };
   documents?: FDRDocument[];
   audit?: AuditLogEntry[];
-  declared_deposit_amount?: number;
-  bank_confirmed_amount?: number;
-  declared_maturity_date?: string;
-  bank_confirmed_maturity_date?: string;
-  declared_bank_branch?: string;
-  bank_confirmed_branch?: string;
-  declared_ifsc?: string;
-  bank_confirmed_ifsc?: string;
-  declared_account_number?: string;
-  bank_confirmed_account_number?: string;
-  declared_joint_holder?: string;
-  bank_confirmed_joint_holder?: string;
-  bank_confirmation_ref?: string;
-  bank_confirmation_date?: string;
-  bank_officer_name?: string;
-  bank_officer_designation?: string;
-  mismatch_detected?: number;
-  discrepancy_fields?: string | string[];
-  last_reconciliation_at?: string;
 }
 
 export interface Institution {
@@ -259,4 +250,69 @@ export interface MacroAnalytics {
   quarterlyForecast: Array<{ quarter: string; projected_releases: number; projected_amount: number; risk_level: string }>;
   totalLockedCapital: number;
   activeInstruments: number;
+}
+
+export interface LienInvocation {
+  id: number;
+  fdr_id: number;
+  institution_id: number;
+  invocation_ref: string;
+  reason_code: string;
+  justification: string;
+  demand_amount: number;
+  status: 'Initiated' | 'ShowCause_Served' | 'BankDemand_Issued' | 'Funds_Encashment_Confirmed' | 'Dropped';
+  show_cause_ref?: string;
+  show_cause_issued_at?: string;
+  show_cause_deadline?: string;
+  bank_demand_ref?: string;
+  bank_demand_served_at?: string;
+  recovery_utr_challan?: string;
+  recovery_date?: string;
+  initiated_by?: number;
+  initiated_by_name?: string;
+  initiated_at: string;
+  approved_by?: number;
+  approved_by_name?: string;
+  approved_at?: string;
+  dsc_sign_hash?: string;
+  remarks?: string;
+  institution_name?: string;
+  aicte_id?: string;
+  fdr_number?: string;
+  bank_name?: string;
+  bank_branch?: string;
+  deposit_amount?: number;
+  maturity_date?: string;
+}
+
+export interface CertificateData {
+  form_type: 'FORM_A' | 'FORM_B' | 'FORM_C' | 'FORM_D';
+  form_title: string;
+  certificate_number: string;
+  issue_date: string;
+  institution_name: string;
+  aicte_id: string;
+  fdr_number: string;
+  bank_name: string;
+  bank_branch: string;
+  deposit_amount: number;
+  deposit_amount_words: string;
+  maturity_date: string;
+  qr_code_url: string;
+  dsc_sign_hash: string;
+  signer_name: string;
+  signer_designation: string;
+  legal_provisions: string[];
+}
+
+export interface BulkIngestionJob {
+  id: number;
+  file_name: string;
+  total_rows: number;
+  success_count: number;
+  error_count: number;
+  status: string;
+  summary_log?: string;
+  uploaded_by_name?: string;
+  created_at: string;
 }

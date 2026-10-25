@@ -30,6 +30,28 @@ export const FDRForm: React.FC<FDRFormProps> = ({
   const [ifscLoading, setIfscLoading] = useState(false);
   const [ifscResult, setIfscResult] = useState<any>(null);
 
+  // NeSL e-BG state
+  const [neslId, setNeslId] = useState('NESL-MH-2024-8899');
+  const [neslLoading, setNeslLoading] = useState(false);
+  const [neslResult, setNeslResult] = useState<any>(null);
+
+  const handleValidateNeSL = async () => {
+    if (!neslId) return;
+    setNeslLoading(true);
+    try {
+      const res = await api.post('/fdrs/verify-nesl', {
+        nesl_identifier: neslId,
+        deposit_amount: watch('deposit_amount') ? parseFloat(watch('deposit_amount') as any) : 5000000,
+        bank_name: watch('bank_name') || 'State Bank of India'
+      });
+      setNeslResult(res.data);
+    } catch (err) {
+      setNeslResult({ verified: false, message: 'NeSL authentication service error' });
+    } finally {
+      setNeslLoading(false);
+    }
+  };
+
   const {
     register,
     handleSubmit,
@@ -203,6 +225,50 @@ export const FDRForm: React.FC<FDRFormProps> = ({
         )}
       </div>
 
+      {/* NeSL Electronic Bank Guarantee (e-BG) Verification */}
+      <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded-xl space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-semibold text-slate-700">
+            NeSL Electronic Bank Guarantee (e-BG) & Digital Stamp Verification
+          </label>
+          <span className="text-[10px] text-indigo-700 font-bold bg-indigo-100 px-2 py-0.5 rounded">
+            RBI / DFS Mandated
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="e.g. NESL-MH-2024-8899"
+            value={neslId}
+            onChange={(e) => setNeslId(e.target.value.toUpperCase())}
+            className="w-full px-3 py-1.5 border border-indigo-200 rounded-lg text-xs uppercase font-mono"
+          />
+          <button
+            type="button"
+            onClick={handleValidateNeSL}
+            disabled={neslLoading}
+            className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs font-semibold shrink-0"
+          >
+            {neslLoading ? 'Authenticating...' : 'Verify NeSL'}
+          </button>
+        </div>
+
+        {neslResult && neslResult.verified && (
+          <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-[11px] space-y-1">
+            <div className="flex items-center justify-between font-bold">
+              <span className="flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                {neslResult.e_stamping_certificate}
+              </span>
+              <span>₹{neslResult.stamp_duty_paid} e-Stamp Duty Paid</span>
+            </div>
+            <p className="text-[10px] text-emerald-700 font-medium">
+              Signed by: {neslResult.signer_name} • Certifying Authority: {neslResult.certifying_authority}
+            </p>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -266,6 +332,50 @@ export const FDRForm: React.FC<FDRFormProps> = ({
             <span className="text-[10px] bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded font-bold">
               ✓ RBI Scheduled Bank
             </span>
+          </div>
+        )}
+      </div>
+
+      {/* NeSL Electronic Bank Guarantee (e-BG) Verification */}
+      <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded-xl space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-semibold text-slate-700">
+            NeSL Electronic Bank Guarantee (e-BG) & Digital Stamp Verification
+          </label>
+          <span className="text-[10px] text-indigo-700 font-bold bg-indigo-100 px-2 py-0.5 rounded">
+            RBI / DFS Mandated
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="e.g. NESL-MH-2024-8899"
+            value={neslId}
+            onChange={(e) => setNeslId(e.target.value.toUpperCase())}
+            className="w-full px-3 py-1.5 border border-indigo-200 rounded-lg text-xs uppercase font-mono"
+          />
+          <button
+            type="button"
+            onClick={handleValidateNeSL}
+            disabled={neslLoading}
+            className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs font-semibold shrink-0"
+          >
+            {neslLoading ? 'Authenticating...' : 'Verify NeSL'}
+          </button>
+        </div>
+
+        {neslResult && neslResult.verified && (
+          <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-[11px] space-y-1">
+            <div className="flex items-center justify-between font-bold">
+              <span className="flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                {neslResult.e_stamping_certificate}
+              </span>
+              <span>₹{neslResult.stamp_duty_paid} e-Stamp Duty Paid</span>
+            </div>
+            <p className="text-[10px] text-emerald-700 font-medium">
+              Signed by: {neslResult.signer_name} • Certifying Authority: {neslResult.certifying_authority}
+            </p>
           </div>
         )}
       </div>

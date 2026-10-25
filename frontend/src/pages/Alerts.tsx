@@ -383,7 +383,7 @@ export const Alerts: React.FC = () => {
                               <div>
                                 <span className="font-bold text-slate-800">{log.channel}</span>
                                 <span className="text-[10px] text-amber-600 block font-semibold">
-                                  {log.trigger_days ?? (log as any).days_before_maturity ?? 0} Days Pre-Maturity Nudge
+                                  {log.trigger_days} Days Pre-Maturity Nudge
                                 </span>
                               </div>
                             </div>
@@ -400,7 +400,7 @@ export const Alerts: React.FC = () => {
                           </td>
                           <td className="py-3.5 px-4 max-w-sm">
                             <p className="text-slate-700 text-[11px] leading-relaxed line-clamp-2 bg-slate-50 p-2 rounded border border-slate-100">
-                              {log.message || (log as any).message_body}
+                              {log.message}
                             </p>
                           </td>
                           <td className="py-3.5 px-4 text-right">

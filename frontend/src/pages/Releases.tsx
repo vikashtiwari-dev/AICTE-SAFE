@@ -201,8 +201,7 @@ export const Releases: React.FC = () => {
                 </tr>
               ) : (
                 requests.map((req) => {
-                  const rawStage = req.review_stage || (req.status === 'Completed' ? 'Completed' : 'Dealing_Officer');
-                  const stage = rawStage === 'Dealing_Assistant' ? 'Dealing_Officer' : rawStage;
+                  const stage = req.review_stage || (req.status === 'Completed' ? 'Completed' : 'Dealing_Officer');
                   return (
                     <tr key={req.id} className="hover:bg-slate-50 transition-colors">
                       <td className="py-3.5 px-4">
@@ -324,7 +323,7 @@ export const Releases: React.FC = () => {
                           {isBureauOrAdmin && req.status !== 'Completed' && req.status !== 'Rejected' && (
                             <>
                               {/* Advance to next tier button */}
-                              {(stage === 'Dealing_Officer' || stage === 'Dealing_Assistant') && (
+                              {stage === 'Dealing_Officer' && (
                                 <button
                                   onClick={() => {
                                     setSelectedReq(req);

@@ -2,84 +2,67 @@ import express from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
 import { db } from '../db/database';
-import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { upload } from '../middleware/upload';
+import { authenticate, requireRole, AuthRequest, maskAccountNumber } from '../middleware/auth';
+import { upload, validateFileMagic } from '../middleware/upload';
+import { lookupIFSC, verifyNeSLeBG, validateSFMS_IFN760 } from '../services/bankingService';
+import { extractFDRFromDocument } from '../services/ocrService';
+import { calculateRequiredDeposit, validateLockInEligibility } from '../services/aphService';
 import path from 'path';
 
 const router = express.Router();
 
-const BANK_IFSC_DB: Record<string, { bank: string; branch: string; city: string; state: string; micr: string }> = {
-  'SBIN': { bank: 'State Bank of India', branch: 'Main Institutional Treasury Branch', city: 'Mumbai', state: 'Maharashtra', micr: '400002001' },
-  'PUNB': { bank: 'Punjab National Bank', branch: 'Parliament Street Branch', city: 'New Delhi', state: 'Delhi', micr: '110024001' },
-  'BARB': { bank: 'Bank of Baroda', branch: 'Corporate Centre Branch', city: 'Vadodara', state: 'Gujarat', micr: '390012001' },
-  'CNRB': { bank: 'Canara Bank', branch: 'Head Office Bangalore', city: 'Bengaluru', state: 'Karnataka', micr: '560015001' },
-  'HDFC': { bank: 'HDFC Bank Ltd', branch: 'Kanjurmarg Commercial Branch', city: 'Mumbai', state: 'Maharashtra', micr: '400240001' },
-  'ICIC': { bank: 'ICICI Bank Ltd', branch: 'Bandra Kurla Complex Branch', city: 'Mumbai', state: 'Maharashtra', micr: '400229001' },
-  'UBIN': { bank: 'Union Bank of India', branch: 'Nariman Point Branch', city: 'Mumbai', state: 'Maharashtra', micr: '400026001' },
-  'IDIB': { bank: 'Indian Bank', branch: 'Rajaji Salai Main Branch', city: 'Chennai', state: 'Tamil Nadu', micr: '600019001' },
-};
+// POST /api/fdrs/ocr-extract - Real AI / OCR entity extraction & discrepancy detection
+router.post('/ocr-extract', authenticate, upload.single('file'), async (req: AuthRequest, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG)' });
+    }
 
-// POST /api/fdrs/ocr-extract - AI / OCR scanning
-router.post('/ocr-extract', authenticate, upload.single('file'), (req: AuthRequest, res) => {
-  const randomSuffix = Math.floor(100000 + Math.random() * 900000);
-  const today = new Date();
-  const issueDate = new Date(today.getTime() - 180 * 86400000).toISOString().split('T')[0];
-  const maturityDate = new Date(today.getTime() + 365 * 86400000).toISOString().split('T')[0];
+    const submittedData = {
+      deposit_amount: req.body.declared_amount ? parseFloat(req.body.declared_amount) : undefined,
+      fdr_number: req.body.declared_fdr_number,
+    };
 
-  const extracted = {
-    fdr_number: `FDR-OCR-${randomSuffix}`,
-    bank_name: 'State Bank of India',
-    bank_branch: 'Institutional Treasury Branch',
-    ifsc_code: 'SBIN0001234',
-    account_number: `39${randomSuffix}810`,
-    deposit_amount: 5000000,
-    currency: 'INR',
-    issue_date: issueDate,
-    maturity_date: maturityDate,
-    interest_rate: 7.15,
-    deposit_type: 'FDR',
-    confidence_score: 98.4,
-    extracted_fields: {
-      fdr_number: { value: `FDR-OCR-${randomSuffix}`, confidence: 0.99 },
-      bank_name: { value: 'State Bank of India', confidence: 0.98 },
-      ifsc_code: { value: 'SBIN0001234', confidence: 0.97 },
-      deposit_amount: { value: 5000000, confidence: 0.99 },
-      maturity_date: { value: maturityDate, confidence: 0.96 }
-    },
-    message: 'AI OCR successfully extracted FDR attributes from document. Review and verify before submitting.'
-  };
-
-  return res.json(extracted);
+    const extracted = await extractFDRFromDocument(req.file.path, submittedData);
+    return res.json(extracted);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'OCR Extraction failed', details: err.message });
+  }
 });
 
-// GET /api/fdrs/validate-ifsc/:ifsc - IFSC direct validation
+// GET /api/fdrs/validate-ifsc/:ifsc - Comprehensive RBI Directory IFSC validation
 router.get('/validate-ifsc/:ifsc', (req, res) => {
-  const code = (req.params.ifsc || '').toUpperCase().trim();
-  if (code.length !== 11) {
-    return res.status(400).json({ valid: false, error: 'IFSC must be exactly 11 alphanumeric characters' });
+  const result = lookupIFSC(req.params.ifsc);
+  if (!result.valid) {
+    return res.status(400).json(result);
   }
+  return res.json(result);
+});
 
-  const prefix = code.substring(0, 4);
-  const bankInfo = BANK_IFSC_DB[prefix] || {
-    bank: `${prefix} Scheduled Bank`,
-    branch: 'Authorized Regulatory Branch',
-    city: 'New Delhi',
-    state: 'Delhi',
-    micr: '110001001'
-  };
+// POST /api/fdrs/verify-nesl - NeSL Electronic Bank Guarantee (e-BG) Verification
+router.post('/verify-nesl', authenticate, (req: AuthRequest, res) => {
+  const { nesl_identifier, deposit_amount, bank_name } = req.body;
+  if (!nesl_identifier) {
+    return res.status(400).json({ error: 'NeSL e-BG Identifier is required' });
+  }
+  const result = verifyNeSLeBG(nesl_identifier, deposit_amount || 5000000, bank_name || 'State Bank of India');
+  return res.json(result);
+});
 
-  return res.json({
-    valid: true,
-    ifsc: code,
-    bank_name: bankInfo.bank,
-    bank_branch: bankInfo.branch,
-    city: bankInfo.city,
-    state: bankInfo.state,
-    micr: bankInfo.micr,
-    rbi_clearing_eligible: true,
-    scheduled_commercial_bank: true,
-    message: `Verified by RBI Public Sector Bank Directory: ${bankInfo.bank}`
-  });
+// POST /api/fdrs/verify-sfms - Structured Financial Messaging (SFMS IFN 760) Verification
+router.post('/verify-sfms', authenticate, (req: AuthRequest, res) => {
+  const { sfms_message } = req.body;
+  if (!sfms_message) {
+    return res.status(400).json({ error: 'SFMS message payload is required' });
+  }
+  const result = validateSFMS_IFN760(sfms_message);
+  return res.json(result);
+});
+
+// POST /api/fdrs/aph-calculate - Approval Process Handbook (APH) Statutory Deposit Calculator
+router.post('/aph-calculate', (req, res) => {
+  const result = calculateRequiredDeposit(req.body);
+  return res.json(result);
 });
 
 // GET /api/fdrs - list with filters
@@ -127,8 +110,14 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
     LIMIT ? OFFSET ?
   `).all(...params, parseInt(limit as string), offset) as any[];
 
+  // Apply DPDP Act 2023 compliant sensitive account masking
+  const maskedFdrs = fdrs.map(f => ({
+    ...f,
+    account_number: maskAccountNumber(f.account_number, req.user!.role)
+  }));
+
   return res.json({
-    data: fdrs,
+    data: maskedFdrs,
     total: totalRow.total,
     page: parseInt(page as string),
     limit: parseInt(limit as string),
@@ -157,6 +146,9 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
     return res.status(403).json({ error: 'Forbidden' });
   }
 
+  // Calculate APH Lock-in eligibility
+  const lockInEligibility = validateLockInEligibility(fdr.issue_date, fdr.lock_in_years || 8);
+
   const documents = db.prepare('SELECT * FROM fdr_documents WHERE fdr_id = ? AND is_active = 1 ORDER BY uploaded_at DESC').all(fdr.id) as any[];
   const audit = db.prepare(`
     SELECT a.*, u.full_name as changed_by_name 
@@ -165,7 +157,17 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
     ORDER BY a.changed_at DESC
   `).all(fdr.id) as any[];
 
-  return res.json({ ...fdr, documents, audit });
+  // Sensitive account masking
+  const safeFdr = {
+    ...fdr,
+    raw_account_number: req.user!.role === 'admin' || req.user!.role === 'bureau_officer' ? fdr.account_number : undefined,
+    account_number: maskAccountNumber(fdr.account_number, req.user!.role),
+    lock_in_eligibility: lockInEligibility,
+    documents,
+    audit
+  };
+
+  return res.json(safeFdr);
 });
 
 // POST /api/fdrs - create
@@ -180,15 +182,13 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
     const result = db.prepare(`
       INSERT INTO fdrs (institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount,
         issue_date, maturity_date, interest_rate, deposit_type, purpose, remarks, is_renewal, parent_fdr_id,
-        declared_deposit_amount, declared_maturity_date, declared_bank_branch, declared_account_number, declared_joint_holder,
         submitted_by, last_updated_by, status, verification_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Verification', 'Unverified')
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Verification', 'Unverified')
     `).run(
       institution_id, fdr_number, bank_name, bank_branch || null, account_number || null,
       deposit_amount, issue_date, maturity_date, interest_rate || null,
       deposit_type || 'FDR', purpose || null, remarks || null,
       is_renewal ? 1 : 0, parent_fdr_id || null,
-      deposit_amount, maturity_date, bank_branch || null, account_number || null, 'AICTE and Technical Institution',
       req.user!.userId, req.user!.userId
     );
 
@@ -267,120 +267,16 @@ router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer'
   return res.json({ success: true });
 });
 
-// POST /api/fdrs/:id/reconcile-bank - Dual-Channel Side-by-Side Bank Scrutiny (PS-26265)
-router.post('/:id/reconcile-bank', authenticate, requireRole(['admin', 'bureau_officer']), (req: AuthRequest, res) => {
-  const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
-  if (!fdr) return res.status(404).json({ error: 'FDR not found' });
-
-  const {
-    bank_confirmed_amount,
-    bank_confirmed_maturity_date,
-    bank_confirmed_branch,
-    bank_confirmed_account_number,
-    bank_confirmed_joint_holder,
-    bank_confirmation_ref = 'SFMS-SBI-MANUAL-VERIF',
-    bank_officer_name = 'Branch Authorizer',
-    bank_officer_designation = 'Chief Manager'
-  } = req.body;
-
-  // Automated side-by-side reconciliation logic (PS-26265)
-  const discrepancyFields: string[] = [];
-  const declaredAmt = Number(fdr.declared_deposit_amount || fdr.deposit_amount);
-  const confirmedAmt = Number(bank_confirmed_amount !== undefined ? bank_confirmed_amount : declaredAmt);
-
-  if (Math.abs(declaredAmt - confirmedAmt) > 0.01) {
-    discrepancyFields.push('deposit_amount');
-  }
-
-  const declaredMaturity = (fdr.declared_maturity_date || fdr.maturity_date || '').trim();
-  const confirmedMaturity = (bank_confirmed_maturity_date || declaredMaturity || '').trim();
-  if (declaredMaturity && confirmedMaturity && declaredMaturity !== confirmedMaturity) {
-    discrepancyFields.push('maturity_date');
-  }
-
-  const declaredJoint = (fdr.declared_joint_holder || 'AICTE and Technical Institution').toLowerCase();
-  const confirmedJoint = (bank_confirmed_joint_holder || declaredJoint).toLowerCase();
-  if (!confirmedJoint.includes('aicte')) {
-    discrepancyFields.push('joint_holder');
-  }
-
-  const hasMismatch = discrepancyFields.length > 0;
-  const newVerificationStatus = hasMismatch ? 'Discrepancy' : 'Verified';
-  const reconciliationDate = new Date().toISOString();
-
-  let verificationNotes = hasMismatch
-    ? `Bank confirmation discrepancy identified across: ${discrepancyFields.join(', ')}. `
-    : 'Bank confirmation matched 100% concordant with declared instrument details. ';
-  
-  if (discrepancyFields.includes('deposit_amount')) {
-    const delta = confirmedAmt - declaredAmt;
-    verificationNotes += `Declared: ₹${declaredAmt.toLocaleString('en-IN')}, Bank Confirmed: ₹${confirmedAmt.toLocaleString('en-IN')} (Delta: ${delta > 0 ? '+' : ''}₹${delta.toLocaleString('en-IN')}). `;
-  }
-
-  db.prepare(`
-    UPDATE fdrs SET
-      bank_confirmed_amount = ?,
-      bank_confirmed_maturity_date = ?,
-      bank_confirmed_branch = ?,
-      bank_confirmed_account_number = ?,
-      bank_confirmed_joint_holder = ?,
-      bank_confirmation_ref = ?,
-      bank_confirmation_date = ?,
-      bank_officer_name = ?,
-      bank_officer_designation = ?,
-      mismatch_detected = ?,
-      discrepancy_fields = ?,
-      verification_status = ?,
-      verification_notes = ?,
-      verified_by = ?,
-      verified_at = datetime('now'),
-      last_reconciliation_at = ?,
-      status = CASE WHEN ? = 0 AND status = 'Pending Verification' THEN 'Active' ELSE status END,
-      last_updated_by = ?,
-      last_updated_at = datetime('now')
-    WHERE id = ?
-  `).run(
-    confirmedAmt,
-    confirmedMaturity,
-    bank_confirmed_branch || fdr.bank_branch,
-    bank_confirmed_account_number || fdr.account_number,
-    bank_confirmed_joint_holder || fdr.declared_joint_holder || 'AICTE and Technical Institution',
-    bank_confirmation_ref,
-    reconciliationDate,
-    bank_officer_name,
-    bank_officer_designation,
-    hasMismatch ? 1 : 0,
-    JSON.stringify(discrepancyFields),
-    newVerificationStatus,
-    verificationNotes,
-    req.user!.userId,
-    reconciliationDate,
-    hasMismatch ? 1 : 0,
-    req.user!.userId,
-    req.params.id
-  );
-
-  // If mismatch detected, automatically generate or update an alert
-  if (hasMismatch) {
-    db.prepare(`
-      INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
-      VALUES (?, ?, 'Discrepancy', 'Critical', ?, date('now', '+7 days'))
-    `).run(fdr.id, fdr.institution_id, `Bank Reconciliation Mismatch: ${verificationNotes}`);
-  }
-
-  db.prepare(`
-    INSERT INTO audit_log (entity_type, entity_id, action, changed_by, notes)
-    VALUES ('FDR', ?, 'Bank Reconciliation Scrutiny', ?, ?)
-  `).run(fdr.id, req.user!.userId, `Side-by-side reconciliation completed. Status: ${newVerificationStatus}. Notes: ${verificationNotes}`);
-
-  const updated = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id);
-  return res.json(updated);
-});
-
 // POST /api/fdrs/:id/documents - upload
 router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']),
   upload.single('file'), (req: AuthRequest, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    // Enforce strict file magic signature verification to prevent executable/script uploads
+    if (!validateFileMagic(req.file.path)) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(400).json({ error: 'Security validation failed: File headers do not match legitimate document formats (PDF, JPEG, PNG, DOCX).' });
+    }
 
     const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
     if (!fdr) return res.status(404).json({ error: 'FDR not found' });

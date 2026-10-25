@@ -12,6 +12,7 @@ import { Institutions } from './pages/Institutions';
 import { Alerts } from './pages/Alerts';
 import { Releases } from './pages/Releases';
 import { Reports } from './pages/Reports';
+import { Invocations } from './pages/Invocations';
 
 const queryClient = new QueryClient();
 
@@ -58,6 +59,7 @@ export const App: React.FC = () => {
                 <Route path="institutions/:id" element={<Institutions />} />
                 <Route path="alerts" element={<Alerts />} />
                 <Route path="releases" element={<Releases />} />
+                <Route path="invocations" element={<Invocations />} />
                 <Route path="reports" element={<Reports />} />
               </Route>
 

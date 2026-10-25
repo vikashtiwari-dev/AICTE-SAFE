@@ -77,6 +77,19 @@ export function generateAlerts() {
         fdr.maturity_date
       );
       alertsCreated++;
+
+      // If matured more than 30 days ago without renewal, flag statutory escalation
+      if (Math.abs(daysToMaturity) >= 30 && !existingAlert('Overdue')) {
+        db.prepare(`
+          INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
+          VALUES (?, ?, 'Overdue', 'Critical', ?, ?)
+        `).run(
+          fdr.id, fdr.institution_id,
+          `STATUTORY ESCALATION: FDR ${fdr.fdr_number} is ${Math.abs(daysToMaturity)} days overdue. Subject to Regulation 8 Show-Cause Notice & Lien Invocation proceedings.`,
+          fdr.maturity_date
+        );
+        alertsCreated++;
+      }
     }
 
     // Missing documents

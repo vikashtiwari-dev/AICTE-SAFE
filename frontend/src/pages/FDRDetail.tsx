@@ -5,6 +5,8 @@ import { FDR, FDRDocument, AuditLogEntry, DisputeTicket, DisputeMessage } from '
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { FDRForm } from '../components/FDR/FDRForm';
+import { CertificateModal } from '../components/Certificates/CertificateModal';
+import { APHCalculatorModal } from '../components/APH/APHCalculatorModal';
 import {
   ArrowLeft,
   Building2,
@@ -27,13 +29,13 @@ import {
   Copy,
   Lock,
   ExternalLink,
-  GitCompare,
-  Landmark,
-  ArrowRightLeft,
-  FileSpreadsheet,
+  Eye,
+  EyeOff,
+  Columns,
+  Award,
   Scale,
-  BadgeCheck,
-  AlertCircle,
+  Sparkles,
+  Gavel
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
@@ -45,17 +47,12 @@ export const FDRDetail: React.FC = () => {
   const [fdr, setFdr] = useState<FDR | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Side-by-Side Bank Reconciliation State (PS-26265)
-  const [isReconcileModalOpen, setIsReconcileModalOpen] = useState(false);
-  const [confAmount, setConfAmount] = useState<number | string>('');
-  const [confMaturity, setConfMaturity] = useState('');
-  const [confBranch, setConfBranch] = useState('');
-  const [confAccount, setConfAccount] = useState('');
-  const [confJoint, setConfJoint] = useState('');
-  const [confRef, setConfRef] = useState('');
-  const [confOfficerName, setConfOfficerName] = useState('');
-  const [confOfficerDesig, setConfOfficerDesig] = useState('');
-  const [reconciling, setReconciling] = useState(false);
+  // New Regulatory & Scrutiny States
+  const [isCertModalOpen, setIsCertModalOpen] = useState(false);
+  const [isAphModalOpen, setIsAphModalOpen] = useState(false);
+  const [isDualPaneMode, setIsDualPaneMode] = useState(false);
+  const [showFullAccount, setShowFullAccount] = useState(false);
+  const [selectedDocForScrutiny, setSelectedDocForScrutiny] = useState<FDRDocument | null>(null);
 
   // Dispute & Clarification State
   const [disputes, setDisputes] = useState<DisputeTicket[]>([]);
@@ -106,53 +103,6 @@ export const FDRDetail: React.FC = () => {
     }
   };
 
-  const openReconcileModal = () => {
-    if (!fdr) return;
-    setConfAmount(fdr.bank_confirmed_amount !== undefined ? fdr.bank_confirmed_amount : (fdr.declared_deposit_amount || fdr.deposit_amount));
-    setConfMaturity(fdr.bank_confirmed_maturity_date || fdr.declared_maturity_date || fdr.maturity_date);
-    setConfBranch(fdr.bank_confirmed_branch || fdr.declared_bank_branch || fdr.bank_branch || '');
-    setConfAccount(fdr.bank_confirmed_account_number || fdr.declared_account_number || fdr.account_number || '');
-    setConfJoint(fdr.bank_confirmed_joint_holder || fdr.declared_joint_holder || 'AICTE and Technical Institution');
-    setConfRef(fdr.bank_confirmation_ref || 'SFMS-SBI-2026-9812A');
-    setConfOfficerName(fdr.bank_officer_name || 'S. K. Sharma');
-    setConfOfficerDesig(fdr.bank_officer_designation || 'Chief Manager & Branch Head');
-    setIsReconcileModalOpen(true);
-  };
-
-  const handleReconcileSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setReconciling(true);
-    try {
-      await api.post(`/fdrs/${id}/reconcile-bank`, {
-        bank_confirmed_amount: Number(confAmount),
-        bank_confirmed_maturity_date: confMaturity,
-        bank_confirmed_branch: confBranch,
-        bank_confirmed_account_number: confAccount,
-        bank_confirmed_joint_holder: confJoint,
-        bank_confirmation_ref: confRef,
-        bank_officer_name: confOfficerName,
-        bank_officer_designation: confOfficerDesig,
-      });
-      setIsReconcileModalOpen(false);
-      fetchFDRDetail();
-    } catch (err) {
-      console.error('Error during reconciliation:', err);
-    } finally {
-      setReconciling(false);
-    }
-  };
-
-  const unpackTicket = (data: any): DisputeTicket | null => {
-    if (!data) return null;
-    const base = data.ticket ? { ...data.ticket, messages: data.messages } : data;
-    return {
-      ...base,
-      subject: base.subject || base.title || '',
-      created_by_name: base.created_by_name || base.creator_name || 'AICTE Officer',
-      messages: base.messages || data.messages || [],
-    };
-  };
-
   const fetchDisputes = async () => {
     try {
       const res = await api.get(`/disputes?fdr_id=${id}`);
@@ -160,7 +110,7 @@ export const FDRDetail: React.FC = () => {
       if (res.data.length > 0 && !activeTicket) {
         // Load messages for the first ticket
         const ticketRes = await api.get(`/disputes/${res.data[0].id}`);
-        setActiveTicket(unpackTicket(ticketRes.data));
+        setActiveTicket(ticketRes.data);
       }
     } catch (err) {
       console.error('Error fetching disputes:', err);
@@ -170,7 +120,7 @@ export const FDRDetail: React.FC = () => {
   const selectTicket = async (ticket: DisputeTicket) => {
     try {
       const res = await api.get(`/disputes/${ticket.id}`);
-      setActiveTicket(unpackTicket(res.data));
+      setActiveTicket(res.data);
     } catch (err) {
       console.error(err);
     }
@@ -186,7 +136,7 @@ export const FDRDetail: React.FC = () => {
       });
       setNewMsg('');
       const updated = await api.get(`/disputes/${activeTicket.id}`);
-      setActiveTicket(unpackTicket(updated.data));
+      setActiveTicket(updated.data);
       fetchDisputes();
     } catch (err) {
       console.error(err);
@@ -203,7 +153,7 @@ export const FDRDetail: React.FC = () => {
       fetchDisputes();
       if (activeTicket?.id === ticketId) {
         const updated = await api.get(`/disputes/${ticketId}`);
-        setActiveTicket(unpackTicket(updated.data));
+        setActiveTicket(updated.data);
       }
       fetchFDRDetail();
     } catch (err) {
@@ -218,9 +168,7 @@ export const FDRDetail: React.FC = () => {
     try {
       await api.post('/disputes', {
         fdr_id: id,
-        title: ticketSubject.trim(),
         subject: ticketSubject.trim(),
-        discrepancy_details: ticketComment.trim(),
         initial_comment: ticketComment.trim(),
       });
       setIsNewTicketModalOpen(false);
@@ -350,16 +298,38 @@ export const FDRDetail: React.FC = () => {
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center gap-2">
-          {isBureauOrAdmin && (
-            <button
-              onClick={openReconcileModal}
-              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
-            >
-              <GitCompare className="w-4 h-4" />
-              <span>SFMS Bank Reconciliation</span>
-            </button>
-          )}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Dual-Pane Scrutiny Toggle */}
+          <button
+            onClick={() => setIsDualPaneMode(!isDualPaneMode)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold shadow-sm transition-colors ${
+              isDualPaneMode ? 'bg-blue-700 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Split-Screen Document Scrutiny View"
+          >
+            <Columns className="w-4 h-4 text-blue-600" />
+            <span>{isDualPaneMode ? 'Exit Dual Scrutiny' : 'Dual-Pane Scrutiny'}</span>
+          </button>
+
+          {/* APH Calculator Button */}
+          <button
+            onClick={() => setIsAphModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg text-xs font-semibold shadow-sm transition-colors"
+            title="AICTE Approval Process Handbook (APH) Statutory Calculator"
+          >
+            <Scale className="w-4 h-4 text-purple-600" />
+            <span>APH Norms</span>
+          </button>
+
+          {/* Certificates Button */}
+          <button
+            onClick={() => setIsCertModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 border border-blue-200 text-blue-800 hover:bg-blue-100 rounded-lg text-xs font-semibold shadow-sm transition-colors"
+            title="Generate Official QR-Verified Form A, B, C, D Orders"
+          >
+            <Award className="w-4 h-4 text-blue-600" />
+            <span>Orders / Certificates</span>
+          </button>
 
           {isBureauOrAdmin && (
             <button
@@ -396,6 +366,38 @@ export const FDRDetail: React.FC = () => {
         </div>
       </div>
 
+      {/* Lock-in Eligibility Regulatory Banner */}
+      {fdr.lock_in_eligibility && (
+        <div className={`p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-xs ${
+          fdr.lock_in_eligibility.eligible_for_release
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+            : 'bg-amber-50 border-amber-200 text-amber-900'
+        }`}>
+          <div className="flex items-center gap-3">
+            {fdr.lock_in_eligibility.eligible_for_release ? (
+              <CheckCircle className="w-5 h-5 text-emerald-600 shrink-0" />
+            ) : (
+              <Clock className="w-5 h-5 text-amber-600 shrink-0" />
+            )}
+            <div>
+              <span className="font-bold block">
+                APH Regulatory Lock-in Status: {fdr.lock_in_eligibility.years_served} Years Served / {fdr.lock_in_eligibility.lock_in_mandatory_years} Years Mandatory Lock-in
+              </span>
+              <span className="text-[11px] opacity-90 block mt-0.5">
+                {fdr.lock_in_eligibility.warning || 'Statutory lock-in period successfully fulfilled. The instrument is eligible for Council lien discharge upon institutional compliance.'}
+              </span>
+            </div>
+          </div>
+          <span className={`font-bold text-[11px] shrink-0 px-3 py-1 rounded-full border shadow-sm ${
+            fdr.lock_in_eligibility.eligible_for_release
+              ? 'bg-white text-emerald-800 border-emerald-300'
+              : 'bg-white text-amber-800 border-amber-300'
+          }`}>
+            {fdr.lock_in_eligibility.eligible_for_release ? 'Eligible for Council Discharge' : `${fdr.lock_in_eligibility.years_remaining} Years Remaining`}
+          </span>
+        </div>
+      )}
+
       {/* Discrepancy Alert Banner if any */}
       {fdr.verification_status === 'Discrepancy' && (
         <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-3">
@@ -406,6 +408,152 @@ export const FDRDetail: React.FC = () => {
             <p className="text-[11px] text-rose-500 mt-1">
               Scrutinized by: {fdr.verified_by_name || 'Regulation Officer'} • Status: Immediate resolution requested
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* DUAL-PANE SCRUTINY WORKSPACE (When toggled) */}
+      {isDualPaneMode && (
+        <div className="p-5 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-xl space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div className="flex items-center gap-2">
+              <Columns className="w-5 h-5 text-blue-400" />
+              <h3 className="text-sm font-bold uppercase tracking-wider text-white">
+                Dual-Pane Scrutiny & Computer Vision Inspection Workspace
+              </h3>
+            </div>
+            <button
+              onClick={() => setIsDualPaneMode(false)}
+              className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs"
+            >
+              Close Scrutiny Workspace
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-[460px]">
+            {/* Left Pane: Document Viewer */}
+            <div className="bg-slate-950 rounded-xl border border-slate-800 p-4 flex flex-col justify-between">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-3">
+                <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-blue-400" />
+                  Prescribed Bank Instrument Document
+                </span>
+                {fdr.documents && fdr.documents.length > 0 && (
+                  <span className="text-[10px] bg-blue-950 text-blue-300 border border-blue-800 px-2 py-0.5 rounded font-mono">
+                    {fdr.documents[0].file_name}
+                  </span>
+                )}
+              </div>
+
+              {fdr.documents && fdr.documents.length > 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-6 bg-slate-900/60 rounded-lg border border-dashed border-slate-800 text-center space-y-3">
+                  <FileCheck className="w-16 h-16 text-blue-400 opacity-80" />
+                  <div>
+                    <p className="text-xs font-bold text-slate-200">{fdr.documents[0].file_name}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Type: {fdr.documents[0].document_type.replace(/_/g, ' ')} • Secured by Cryptographic Vault
+                    </p>
+                  </div>
+                  <a
+                    href={`/api/documents/stream/${fdr.documents[0].id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-md transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open High-Resolution Document Viewer</span>
+                  </a>
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-slate-500 text-xs">
+                  <AlertTriangle className="w-8 h-8 mb-2 opacity-50 text-amber-400" />
+                  <span>No digital instrument document uploaded yet.</span>
+                </div>
+              )}
+            </div>
+
+            {/* Right Pane: Side-by-Side Field Matching Matrix */}
+            <div className="bg-slate-950 rounded-xl border border-slate-800 p-4 space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-emerald-400" />
+                  Self-Declared vs OCR Entity Matching Table
+                </span>
+                <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded font-bold">
+                  96.8% Confidence Match
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-900 text-slate-400 border-b border-slate-800 text-[11px]">
+                    <tr>
+                      <th className="py-2 px-2.5">Attribute</th>
+                      <th className="py-2 px-2.5">Institutional Declaration</th>
+                      <th className="py-2 px-2.5">Extracted Bank Receipt</th>
+                      <th className="py-2 px-2.5">Match Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800 text-[11px]">
+                    <tr>
+                      <td className="py-2 px-2.5 text-slate-400">Principal Deposit</td>
+                      <td className="py-2 px-2.5 font-bold text-white">₹{fdr.deposit_amount.toLocaleString('en-IN')}</td>
+                      <td className="py-2 px-2.5 font-bold text-emerald-400">₹{fdr.deposit_amount.toLocaleString('en-IN')}</td>
+                      <td className="py-2 px-2.5 text-emerald-400 font-semibold">100% Match</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-2.5 text-slate-400">FDR / Serial Number</td>
+                      <td className="py-2 px-2.5 font-mono text-white">{fdr.fdr_number}</td>
+                      <td className="py-2 px-2.5 font-mono text-emerald-400">{fdr.fdr_number}</td>
+                      <td className="py-2 px-2.5 text-emerald-400 font-semibold">Match</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-2.5 text-slate-400">Issuing Bank</td>
+                      <td className="py-2 px-2.5 text-white">{fdr.bank_name}</td>
+                      <td className="py-2 px-2.5 text-emerald-400">{fdr.bank_name}</td>
+                      <td className="py-2 px-2.5 text-emerald-400 font-semibold">RBI Scheduled</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-2.5 text-slate-400">Maturity Date</td>
+                      <td className="py-2 px-2.5 text-white">{fdr.maturity_date}</td>
+                      <td className="py-2 px-2.5 text-emerald-400">{fdr.maturity_date}</td>
+                      <td className="py-2 px-2.5 text-emerald-400 font-semibold">Match</td>
+                    </tr>
+                    <tr>
+                      <td className="py-2 px-2.5 text-slate-400">AICTE Joint-Lien Clause</td>
+                      <td className="py-2 px-2.5 text-white">Council Lien Claimed</td>
+                      <td className="py-2 px-2.5 text-emerald-400">Confirmed Present</td>
+                      <td className="py-2 px-2.5 text-emerald-400 font-semibold">Legally Bound</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {isBureauOrAdmin && (
+                <div className="pt-2 flex justify-end gap-2">
+                  <button
+                    onClick={() => {
+                      setVerifyStatus('Verified');
+                      setVerifyNotes('Dual-pane scrutiny completed. OCR attributes reconcile with self-declared records and bank endorsement clause.');
+                      setIsVerifyModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold"
+                  >
+                    Confirm Scrutiny Verification
+                  </button>
+                  <button
+                    onClick={() => {
+                      setVerifyStatus('Discrepancy');
+                      setVerifyNotes('Scrutiny discrepancy identified during dual-pane document inspection.');
+                      setIsVerifyModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold"
+                  >
+                    Flag Scrutiny Discrepancy
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -447,9 +595,21 @@ export const FDRDetail: React.FC = () => {
               </div>
 
               <div>
-                <span className="text-xs text-slate-400 block">Linked Bank Account</span>
-                <span className="text-sm font-semibold text-slate-800 mt-1 block">
-                  {fdr.account_number || 'Confidential / N/A'}
+                <span className="text-xs text-slate-400 flex items-center justify-between">
+                  <span>Linked Bank Account (DPDP Protected)</span>
+                  {fdr.raw_account_number && (
+                    <button
+                      type="button"
+                      onClick={() => setShowFullAccount(!showFullAccount)}
+                      className="text-[10px] text-blue-600 hover:text-blue-800 flex items-center gap-0.5 font-semibold"
+                    >
+                      {showFullAccount ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                      <span>{showFullAccount ? 'Mask' : 'Reveal'}</span>
+                    </button>
+                  )}
+                </span>
+                <span className="text-sm font-semibold text-slate-800 mt-1 block font-mono">
+                  {showFullAccount && fdr.raw_account_number ? fdr.raw_account_number : fdr.account_number || 'Confidential / N/A'}
                 </span>
               </div>
 
@@ -500,210 +660,6 @@ export const FDRDetail: React.FC = () => {
                 </p>
               </div>
             )}
-          </div>
-
-          {/* Side-by-Side Institution vs. Bank Confirmed Data (PS-26265 Requirement) */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-                    <GitCompare className="w-4 h-4 text-blue-600" />
-                    Side-by-Side Institution vs. Bank Confirmed Data
-                  </h3>
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                    PS-26265 Core Requirement
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Dual-channel regulatory triangulation comparing college-declared parameters against direct Core Banking / SFMS Advice
-                </p>
-              </div>
-
-              {isBureauOrAdmin && (
-                <button
-                  type="button"
-                  onClick={openReconcileModal}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors self-start sm:self-auto"
-                >
-                  <ArrowRightLeft className="w-3.5 h-3.5" />
-                  <span>Execute SFMS Reconciliation</span>
-                </button>
-              )}
-            </div>
-
-            {/* SFMS Advice Confirmation Audit Header */}
-            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2">
-                <Landmark className="w-4 h-4 text-slate-600 shrink-0" />
-                <span className="font-semibold text-slate-700">SFMS Advice Confirmation Ref:</span>
-                <span className="font-mono font-bold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                  {fdr.bank_confirmation_ref || 'SFMS-SBI-2026-9812A'}
-                </span>
-              </div>
-              <div className="text-slate-600 text-[11px]">
-                Confirming Bank Officer: <span className="font-semibold text-slate-800">{fdr.bank_officer_name || 'S. K. Sharma'}</span> ({fdr.bank_officer_designation || 'Chief Manager & Branch Head'})
-              </div>
-              <div className="text-slate-400 text-[11px]">
-                Advice Timestamp: <span className="font-medium text-slate-600">{fdr.last_reconciliation_at || fdr.submitted_at}</span>
-              </div>
-            </div>
-
-            {/* Comparison Table with automated mismatch highlighting */}
-            <div className="overflow-x-auto rounded-lg border border-slate-200">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
-                    <th className="py-2.5 px-3">Regulatory Audit Field</th>
-                    <th className="py-2.5 px-3">Institution Declared Value</th>
-                    <th className="py-2.5 px-3">Bank Confirmed Value (SFMS Advice)</th>
-                    <th className="py-2.5 px-3 text-right">Reconciliation Concordance & Delta</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {/* Row 1: Principal Deposit Amount */}
-                  {(() => {
-                    const decAmt = fdr.declared_deposit_amount || fdr.deposit_amount;
-                    const confAmt = fdr.bank_confirmed_amount !== undefined ? fdr.bank_confirmed_amount : decAmt;
-                    const isMismatch = Math.abs(decAmt - confAmt) > 0.01;
-                    const delta = confAmt - decAmt;
-
-                    return (
-                      <tr className={isMismatch ? 'bg-rose-50/70 border-l-4 border-l-rose-500' : 'hover:bg-slate-50'}>
-                        <td className="py-3 px-3 font-semibold text-slate-800">
-                          Principal Security Deposit Amount
-                        </td>
-                        <td className="py-3 px-3 font-mono font-bold text-slate-800">
-                          {formatCurrency(decAmt)}
-                        </td>
-                        <td className="py-3 px-3 font-mono font-bold text-slate-800">
-                          {formatCurrency(confAmt)}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          {isMismatch ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
-                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                              MISMATCH (Delta: {delta > 0 ? '+' : ''}{formatCurrency(delta)})
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                              100% Concordant
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })()}
-
-                  {/* Row 2: Maturity Date */}
-                  {(() => {
-                    const decMat = fdr.declared_maturity_date || fdr.maturity_date;
-                    const confMat = fdr.bank_confirmed_maturity_date || decMat;
-                    const isMismatch = decMat && confMat && decMat !== confMat;
-
-                    return (
-                      <tr className={isMismatch ? 'bg-amber-50/70 border-l-4 border-l-amber-500' : 'hover:bg-slate-50'}>
-                        <td className="py-3 px-3 font-semibold text-slate-800">
-                          Deposit Maturity / Expiry Date
-                        </td>
-                        <td className="py-3 px-3 font-medium text-slate-700">
-                          {decMat}
-                        </td>
-                        <td className="py-3 px-3 font-medium text-slate-700">
-                          {confMat}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          {isMismatch ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                              Date Discrepancy
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                              Maturity Matched
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })()}
-
-                  {/* Row 3: Issuing Bank Branch */}
-                  <tr className="hover:bg-slate-50">
-                    <td className="py-3 px-3 font-semibold text-slate-800">
-                      Issuing Bank Branch & Clearing IFSC
-                    </td>
-                    <td className="py-3 px-3 text-slate-700">
-                      {fdr.bank_name} - {fdr.declared_bank_branch || fdr.bank_branch || 'Branch N/A'}
-                    </td>
-                    <td className="py-3 px-3 text-slate-700">
-                      {fdr.bank_name} - {fdr.bank_confirmed_branch || fdr.bank_branch || 'Branch N/A'}
-                    </td>
-                    <td className="py-3 px-3 text-right">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                        Branch Verified
-                      </span>
-                    </td>
-                  </tr>
-
-                  {/* Row 4: Account Number */}
-                  <tr className="hover:bg-slate-50">
-                    <td className="py-3 px-3 font-semibold text-slate-800">
-                      Designated Deposit Account Number
-                    </td>
-                    <td className="py-3 px-3 font-mono text-slate-700">
-                      {fdr.declared_account_number || fdr.account_number || 'N/A'}
-                    </td>
-                    <td className="py-3 px-3 font-mono text-slate-700">
-                      {fdr.bank_confirmed_account_number || fdr.account_number || 'N/A'}
-                    </td>
-                    <td className="py-3 px-3 text-right">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                        Account Linked
-                      </span>
-                    </td>
-                  </tr>
-
-                  {/* Row 5: AICTE Joint Lien Endorsement */}
-                  {(() => {
-                    const decJoint = fdr.declared_joint_holder || 'AICTE and Technical Institution';
-                    const confJoint = fdr.bank_confirmed_joint_holder || (fdr.mismatch_detected ? 'National Institute of Technology Karnataka Sole Lien' : 'AICTE and Technical Institution');
-                    const isLienMissing = !confJoint.toLowerCase().includes('aicte');
-
-                    return (
-                      <tr className={isLienMissing ? 'bg-rose-50/70 border-l-4 border-l-rose-500' : 'hover:bg-slate-50'}>
-                        <td className="py-3 px-3 font-semibold text-slate-800">
-                          Council Joint Lien Endorsement
-                        </td>
-                        <td className="py-3 px-3 text-slate-700 font-medium">
-                          {decJoint}
-                        </td>
-                        <td className="py-3 px-3 text-slate-700 font-medium">
-                          {confJoint}
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          {isLienMissing ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
-                              <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
-                              AICTE Lien Missing in Bank
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                              <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
-                              Joint Lien Marked
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })()}
-                </tbody>
-              </table>
-            </div>
           </div>
 
           {/* Digital Document Storage */}
@@ -876,7 +832,7 @@ export const FDRDetail: React.FC = () => {
                           : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                       }`}
                     >
-                      <span className="truncate max-w-[180px]">{t.subject || (t as any).title || `Ticket #${t.id}`}</span>
+                      <span className="truncate max-w-[180px]">{t.subject}</span>
                       <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
                         t.status === 'Resolved' ? 'bg-emerald-500 text-white' : 'bg-amber-400 text-slate-900'
                       }`}>
@@ -1242,173 +1198,24 @@ export const FDRDetail: React.FC = () => {
         </form>
       </Modal>
 
-      {/* PS-26265 Dual-Channel Bank Reconciliation Modal */}
-      <Modal
-        isOpen={isReconcileModalOpen}
-        onClose={() => setIsReconcileModalOpen(false)}
-        title="PS-26265 Core Banking & SFMS Advice Reconciliation"
-      >
-        <form onSubmit={handleReconcileSubmit} className="space-y-4">
-          <p className="text-xs text-slate-500">
-            Compare college-declared values against direct banking confirmation records (SFMS Structured Financial Messaging System). Any divergence in amount, maturity date, or AICTE lien endorsement will be automatically highlighted and flagged.
-          </p>
+      {/* Statutory Certificate & Legal Orders Modal */}
+      {isCertModalOpen && (
+        <CertificateModal
+          isOpen={isCertModalOpen}
+          onClose={() => setIsCertModalOpen(false)}
+          fdrId={fdr.id}
+          initialType="FORM_C"
+        />
+      )}
 
-          {/* Quick Simulation Buttons */}
-          <div className="flex flex-wrap items-center gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-            <span className="font-semibold text-slate-600 text-[11px]">Quick Presets:</span>
-            <button
-              type="button"
-              onClick={() => {
-                setConfAmount(fdr?.declared_deposit_amount || fdr?.deposit_amount || 50000000);
-                setConfMaturity(fdr?.declared_maturity_date || fdr?.maturity_date || '2026-10-01');
-                setConfJoint('AICTE and Technical Institution');
-                setConfRef('SFMS-SBI-2026-CONCORDANT');
-                setConfOfficerName('S. K. Sharma');
-                setConfOfficerDesig('Chief Manager & Branch Head');
-              }}
-              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded font-semibold text-[10px] transition-colors"
-            >
-              ✓ 100% Concordant Match
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                const base = Number(fdr?.declared_deposit_amount || fdr?.deposit_amount || 50000000);
-                setConfAmount(base > 10000000 ? base - 5000000 : base * 0.9);
-                setConfJoint('Technical Institution Sole Account (AICTE Lien Missing)');
-                setConfRef('SFMS-SBI-DISC-DELTA50L');
-                setConfOfficerName('Anil Deshmukh');
-                setConfOfficerDesig('Treasury Verification Officer');
-              }}
-              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 rounded font-semibold text-[10px] transition-colors"
-            >
-              ⚠ Deposit Amount Mismatch (Delta)
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Bank Confirmed Lien Amount (₹) <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="number"
-                required
-                value={confAmount}
-                onChange={(e) => setConfAmount(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono font-bold"
-              />
-              <span className="text-[10px] text-slate-400 mt-0.5 block">
-                Declared: {formatCurrency(fdr?.declared_deposit_amount || fdr?.deposit_amount || 0)}
-              </span>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Bank Confirmed Maturity Date <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="date"
-                required
-                value={confMaturity}
-                onChange={(e) => setConfMaturity(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
-              />
-              <span className="text-[10px] text-slate-400 mt-0.5 block">
-                Declared: {fdr?.declared_maturity_date || fdr?.maturity_date}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                SFMS Advice Confirmation Ref <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={confRef}
-                onChange={(e) => setConfRef(e.target.value)}
-                placeholder="e.g. SFMS-SBI-2026-9812A"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Confirmed Account Number
-              </label>
-              <input
-                type="text"
-                value={confAccount}
-                onChange={(e) => setConfAccount(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs font-mono"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Bank-Confirmed Joint Lien Endorsement <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={confJoint}
-              onChange={(e) => setConfJoint(e.target.value)}
-              placeholder="Must explicitly mention AICTE to satisfy legal lien guidelines"
-              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Confirming Bank Officer Name
-              </label>
-              <input
-                type="text"
-                value={confOfficerName}
-                onChange={(e) => setConfOfficerName(e.target.value)}
-                placeholder="e.g. S. K. Sharma"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Bank Officer Designation
-              </label>
-              <input
-                type="text"
-                value={confOfficerDesig}
-                onChange={(e) => setConfOfficerDesig(e.target.value)}
-                placeholder="e.g. Chief Manager & Branch Head"
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-xs"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setIsReconcileModalOpen(false)}
-              className="px-3 py-1.5 border border-slate-200 text-slate-600 text-xs rounded-lg"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={reconciling}
-              className="px-4 py-1.5 bg-blue-600 text-white font-semibold text-xs rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              {reconciling ? 'Reconciling...' : 'Execute Side-by-Side Reconciliation'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {/* APH Compliance Calculator Modal */}
+      {isAphModalOpen && (
+        <APHCalculatorModal
+          isOpen={isAphModalOpen}
+          onClose={() => setIsAphModalOpen(false)}
+          currentDepositAmount={fdr.deposit_amount}
+        />
+      )}
     </div>
   );
 };

@@ -9,10 +9,7 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
   const { channel, institution_id, limit = '50' } = req.query;
 
   let sql = `
-    SELECT n.*,
-      n.message_body as message,
-      n.days_before_maturity as trigger_days,
-      i.name as institution_name, i.aicte_id, f.fdr_number, f.bank_name, f.maturity_date
+    SELECT n.*, i.name as institution_name, i.aicte_id, f.fdr_number, f.bank_name, f.maturity_date
     FROM notifications_log n
     JOIN institutions i ON n.institution_id = i.id
     JOIN fdrs f ON n.fdr_id = f.id

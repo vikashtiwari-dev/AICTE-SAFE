@@ -9,6 +9,7 @@ import {
   FileBarChart,
   LogOut,
   ShieldCheck,
+  Gavel,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useLanguage } from '../../context/LanguageContext';
@@ -23,6 +24,7 @@ export const Sidebar: React.FC = () => {
     { label: t('institutions'), path: '/institutions', icon: Building2 },
     { label: t('alerts_validity'), path: '/alerts', icon: AlertTriangle },
     { label: t('release_requests'), path: '/releases', icon: ArrowUpRightFromCircle },
+    { label: language === 'hi' ? 'जब्ती एवं मांग आदेश' : 'Lien Invocations', path: '/invocations', icon: Gavel },
     { label: t('reports_audits'), path: '/reports', icon: FileBarChart },
   ];
 

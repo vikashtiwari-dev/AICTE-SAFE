@@ -135,26 +135,7 @@ export function initializeDatabase() {
       last_updated_at TEXT DEFAULT (datetime('now')),
       remarks TEXT,
       is_renewal INTEGER DEFAULT 0,
-      parent_fdr_id INTEGER,
-      declared_deposit_amount REAL,
-      bank_confirmed_amount REAL,
-      declared_maturity_date TEXT,
-      bank_confirmed_maturity_date TEXT,
-      declared_bank_branch TEXT,
-      bank_confirmed_branch TEXT,
-      declared_ifsc TEXT,
-      bank_confirmed_ifsc TEXT,
-      declared_account_number TEXT,
-      bank_confirmed_account_number TEXT,
-      declared_joint_holder TEXT DEFAULT 'AICTE and Technical Institution',
-      bank_confirmed_joint_holder TEXT,
-      bank_confirmation_ref TEXT,
-      bank_confirmation_date TEXT,
-      bank_officer_name TEXT,
-      bank_officer_designation TEXT,
-      mismatch_detected INTEGER DEFAULT 0,
-      discrepancy_fields TEXT DEFAULT '[]',
-      last_reconciliation_at TEXT
+      parent_fdr_id INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS fdr_documents (
@@ -195,15 +176,13 @@ export function initializeDatabase() {
       requested_by INTEGER NOT NULL,
       requested_at TEXT DEFAULT (datetime('now')),
       status TEXT DEFAULT 'Pending',
-      review_stage TEXT DEFAULT 'Dealing_Officer',
+      review_stage TEXT DEFAULT 'Dealing_Assistant',
       dealing_officer_id INTEGER,
       dealing_officer_remarks TEXT,
       dealing_officer_at TEXT,
       finance_officer_id INTEGER,
       finance_officer_remarks TEXT,
       finance_officer_at TEXT,
-      reviewed_by INTEGER,
-      reviewed_at TEXT,
       approved_by INTEGER,
       approved_at TEXT,
       dsc_sign_hash TEXT,
@@ -281,127 +260,65 @@ export function initializeDatabase() {
       ip_address TEXT,
       notes TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS lien_invocations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fdr_id INTEGER NOT NULL,
+      institution_id INTEGER NOT NULL,
+      invocation_ref TEXT UNIQUE NOT NULL,
+      reason_code TEXT NOT NULL,
+      justification TEXT NOT NULL,
+      demand_amount REAL NOT NULL,
+      status TEXT DEFAULT 'Initiated',
+      show_cause_ref TEXT,
+      show_cause_issued_at TEXT,
+      show_cause_deadline TEXT,
+      bank_demand_ref TEXT,
+      bank_demand_served_at TEXT,
+      recovery_utr_challan TEXT,
+      recovery_date TEXT,
+      initiated_by INTEGER,
+      initiated_at TEXT DEFAULT (datetime('now')),
+      approved_by INTEGER,
+      approved_at TEXT,
+      dsc_sign_hash TEXT,
+      remarks TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS bulk_ingestion_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_name TEXT NOT NULL,
+      total_rows INTEGER NOT NULL,
+      success_count INTEGER DEFAULT 0,
+      error_count INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'Completed',
+      summary_log TEXT,
+      uploaded_by INTEGER,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS statutory_certificates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      certificate_type TEXT NOT NULL,
+      fdr_id INTEGER NOT NULL,
+      institution_id INTEGER NOT NULL,
+      certificate_number TEXT UNIQUE NOT NULL,
+      qr_code_data TEXT NOT NULL,
+      dsc_sign_hash TEXT,
+      signer_designation TEXT,
+      issued_at TEXT DEFAULT (datetime('now')),
+      issued_by INTEGER
+    );
   `);
 
+  // Safe schema column migrations for FDR table
+  try { db.exec('ALTER TABLE fdrs ADD COLUMN aph_programme TEXT;'); } catch (_) {}
+  try { db.exec('ALTER TABLE fdrs ADD COLUMN lock_in_years INTEGER DEFAULT 8;'); } catch (_) {}
+  try { db.exec('ALTER TABLE fdrs ADD COLUMN sfms_ifn_ref TEXT;'); } catch (_) {}
+  try { db.exec('ALTER TABLE fdrs ADD COLUMN nesl_bg_identifier TEXT;'); } catch (_) {}
+  try { db.exec('ALTER TABLE fdrs ADD COLUMN is_encashed INTEGER DEFAULT 0;'); } catch (_) {}
+
   console.log('✅ Database schema initialized successfully');
-
-  // Dynamic Column Migration for Side-by-Side Scrutiny & Bank Reconciliation (PS-26265)
-  const fdrColumns = [
-    'declared_deposit_amount REAL',
-    'bank_confirmed_amount REAL',
-    'declared_maturity_date TEXT',
-    'bank_confirmed_maturity_date TEXT',
-    'declared_bank_branch TEXT',
-    'bank_confirmed_branch TEXT',
-    'declared_ifsc TEXT',
-    'bank_confirmed_ifsc TEXT',
-    'declared_account_number TEXT',
-    'bank_confirmed_account_number TEXT',
-    'declared_joint_holder TEXT DEFAULT "AICTE and Technical Institution"',
-    'bank_confirmed_joint_holder TEXT',
-    'bank_confirmation_ref TEXT',
-    'bank_confirmation_date TEXT',
-    'bank_officer_name TEXT',
-    'bank_officer_designation TEXT',
-    'mismatch_detected INTEGER DEFAULT 0',
-    'discrepancy_fields TEXT DEFAULT "[]"',
-    'last_reconciliation_at TEXT'
-  ];
-
-  for (const col of fdrColumns) {
-    try {
-      db.exec(`ALTER TABLE fdrs ADD COLUMN ${col};`);
-    } catch {
-      // Column already exists
-    }
-  }
-
-  // Dynamic Column Migration for Release Requests (reviewed_by, reviewed_at, and stages)
-  const releaseColumns = [
-    'reviewed_by INTEGER',
-    'reviewed_at TEXT',
-    'review_stage TEXT DEFAULT "Dealing_Officer"',
-    'dealing_officer_id INTEGER',
-    'dealing_officer_remarks TEXT',
-    'dealing_officer_at TEXT',
-    'finance_officer_id INTEGER',
-    'finance_officer_remarks TEXT',
-    'finance_officer_at TEXT',
-    'approved_by INTEGER',
-    'approved_at TEXT',
-    'dsc_sign_hash TEXT',
-    'dsc_signer_name TEXT',
-    'dsc_signed_at TEXT'
-  ];
-
-  for (const col of releaseColumns) {
-    try {
-      db.exec(`ALTER TABLE release_requests ADD COLUMN ${col};`);
-    } catch {
-      // Column already exists
-    }
-  }
-
-  try {
-    db.exec(`UPDATE release_requests SET review_stage = 'Dealing_Officer' WHERE review_stage = 'Dealing_Assistant' OR review_stage IS NULL;`);
-  } catch {
-    // Ignore migration catch
-  }
-
-  // Ensure declared fields are initialized from current values for any unpopulated records
-  try {
-    db.exec(`
-      UPDATE fdrs
-      SET declared_deposit_amount = COALESCE(declared_deposit_amount, deposit_amount),
-          declared_maturity_date = COALESCE(declared_maturity_date, maturity_date),
-          declared_bank_branch = COALESCE(declared_bank_branch, bank_branch),
-          declared_account_number = COALESCE(declared_account_number, account_number),
-          declared_joint_holder = COALESCE(declared_joint_holder, 'AICTE and Technical Institution')
-      WHERE declared_deposit_amount IS NULL OR declared_deposit_amount = 0;
-    `);
-
-    db.exec(`
-      UPDATE fdrs
-      SET bank_confirmed_amount = COALESCE(bank_confirmed_amount, deposit_amount),
-          bank_confirmed_maturity_date = COALESCE(bank_confirmed_maturity_date, maturity_date),
-          bank_confirmed_branch = COALESCE(bank_confirmed_branch, bank_branch),
-          bank_confirmed_account_number = COALESCE(bank_confirmed_account_number, account_number),
-          bank_confirmed_joint_holder = COALESCE(bank_confirmed_joint_holder, 'AICTE and Technical Institution'),
-          bank_confirmation_ref = COALESCE(bank_confirmation_ref, 'SFMS-SBI-2026-9812A'),
-          bank_confirmation_date = COALESCE(bank_confirmation_date, '2026-10-24 11:30:00'),
-          bank_officer_name = COALESCE(bank_officer_name, 'S. K. Sharma'),
-          bank_officer_designation = COALESCE(bank_officer_designation, 'Chief Manager & Branch Head'),
-          mismatch_detected = 0,
-          discrepancy_fields = '[]',
-          last_reconciliation_at = COALESCE(last_reconciliation_at, '2026-10-24 11:30:00')
-      WHERE verification_status = 'Verified' AND bank_confirmed_amount IS NULL;
-    `);
-
-    db.exec(`
-      UPDATE fdrs
-      SET declared_deposit_amount = 50000000,
-          bank_confirmed_amount = 45000000,
-          declared_maturity_date = maturity_date,
-          bank_confirmed_maturity_date = maturity_date,
-          declared_bank_branch = bank_branch,
-          bank_confirmed_branch = bank_branch,
-          declared_account_number = account_number,
-          bank_confirmed_account_number = account_number,
-          declared_joint_holder = 'AICTE and National Institute of Technology Karnataka',
-          bank_confirmed_joint_holder = 'National Institute of Technology Karnataka Sole Lien',
-          bank_confirmation_ref = 'SFMS-SBI-DISC-004B',
-          bank_confirmation_date = '2026-10-23 16:45:00',
-          bank_officer_name = 'Anil Deshmukh',
-          bank_officer_designation = 'Treasury Officer, SBI Surathkal',
-          mismatch_detected = 1,
-          discrepancy_fields = '["deposit_amount","joint_holder"]',
-          verification_notes = 'Bank confirmed lien balance is ₹4,50,00,000 against declared ₹5,00,00,000 (Delta: -₹50,00,000). AICTE Joint Endorsement Missing in Bank Record.',
-          last_reconciliation_at = '2026-10-23 16:45:00'
-      WHERE id = 5;
-    `);
-  } catch (syncErr) {
-    console.warn('Reconciliation data sync notice:', syncErr);
-  }
 
   // Auto-seed default accounts and sample data if users table is empty
   try {
@@ -516,56 +433,5 @@ export function initializeDatabase() {
     }
   } catch (seedErr) {
     console.warn('Auto-seed check error:', seedErr);
-  }
-
-  // Ensure declared and bank-confirmed fields are always populated on every boot
-  try {
-    db.exec(`
-      UPDATE fdrs
-      SET declared_deposit_amount = COALESCE(declared_deposit_amount, deposit_amount),
-          declared_maturity_date = COALESCE(declared_maturity_date, maturity_date),
-          declared_bank_branch = COALESCE(declared_bank_branch, bank_branch),
-          declared_account_number = COALESCE(declared_account_number, account_number),
-          declared_joint_holder = COALESCE(declared_joint_holder, 'AICTE and Technical Institution')
-      WHERE declared_deposit_amount IS NULL OR declared_deposit_amount = 0;
-
-      UPDATE fdrs
-      SET bank_confirmed_amount = COALESCE(bank_confirmed_amount, deposit_amount),
-          bank_confirmed_maturity_date = COALESCE(bank_confirmed_maturity_date, maturity_date),
-          bank_confirmed_branch = COALESCE(bank_confirmed_branch, bank_branch),
-          bank_confirmed_account_number = COALESCE(bank_confirmed_account_number, account_number),
-          bank_confirmed_joint_holder = COALESCE(bank_confirmed_joint_holder, 'AICTE and Technical Institution'),
-          bank_confirmation_ref = COALESCE(bank_confirmation_ref, 'SFMS-SBI-2026-9812A'),
-          bank_confirmation_date = COALESCE(bank_confirmation_date, '2026-10-24 11:30:00'),
-          bank_officer_name = COALESCE(bank_officer_name, 'S. K. Sharma'),
-          bank_officer_designation = COALESCE(bank_officer_designation, 'Chief Manager & Branch Head'),
-          mismatch_detected = 0,
-          discrepancy_fields = '[]',
-          last_reconciliation_at = COALESCE(last_reconciliation_at, '2026-10-24 11:30:00')
-      WHERE verification_status = 'Verified' AND bank_confirmed_amount IS NULL;
-
-      UPDATE fdrs
-      SET declared_deposit_amount = 50000000,
-          bank_confirmed_amount = 45000000,
-          declared_maturity_date = maturity_date,
-          bank_confirmed_maturity_date = maturity_date,
-          declared_bank_branch = bank_branch,
-          bank_confirmed_branch = bank_branch,
-          declared_account_number = account_number,
-          bank_confirmed_account_number = account_number,
-          declared_joint_holder = 'AICTE and National Institute of Technology Karnataka',
-          bank_confirmed_joint_holder = 'National Institute of Technology Karnataka Sole Lien',
-          bank_confirmation_ref = 'SFMS-SBI-DISC-004B',
-          bank_confirmation_date = '2026-10-23 16:45:00',
-          bank_officer_name = 'Anil Deshmukh',
-          bank_officer_designation = 'Treasury Officer, SBI Surathkal',
-          mismatch_detected = 1,
-          discrepancy_fields = '["deposit_amount","joint_holder"]',
-          verification_notes = 'Bank confirmed lien balance is ₹4,50,00,000 against declared ₹5,00,00,000 (Delta: -₹50,00,000). AICTE Joint Endorsement Missing in Bank Record.',
-          last_reconciliation_at = '2026-10-23 16:45:00'
-      WHERE id = 5;
-    `);
-  } catch (syncErr) {
-    console.warn('Reconciliation data sync notice:', syncErr);
   }
 }

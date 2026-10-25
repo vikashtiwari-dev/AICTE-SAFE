@@ -5,6 +5,7 @@ import { FDR, Institution } from '../types';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { FDRForm } from '../components/FDR/FDRForm';
+import { BulkUploadModal } from '../components/Bulk/BulkUploadModal';
 import {
   Search,
   Filter,
@@ -14,6 +15,7 @@ import {
   Building2,
   Calendar,
   AlertCircle,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 
@@ -32,6 +34,7 @@ export const FDRList: React.FC = () => {
   const [totalRecords, setTotalRecords] = useState(0);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
 
   useEffect(() => {
     fetchInstitutions();
@@ -117,7 +120,7 @@ export const FDRList: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={exportCSV}
             className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
@@ -125,6 +128,16 @@ export const FDRList: React.FC = () => {
             <Download className="w-4 h-4 text-slate-500" />
             <span>Export CSV</span>
           </button>
+
+          {(user?.role === 'admin' || user?.role === 'bureau_officer') && (
+            <button
+              onClick={() => setIsBulkModalOpen(true)}
+              className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold transition-colors shadow-sm"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <span>Bulk CSV Ingestion</span>
+            </button>
+          )}
 
           {user?.role !== 'viewer' && (
             <button
@@ -359,6 +372,18 @@ export const FDRList: React.FC = () => {
           onCancel={() => setIsAddModalOpen(false)}
         />
       </Modal>
+
+      {/* Batch Bulk CSV Ingestion Modal */}
+      {isBulkModalOpen && (
+        <BulkUploadModal
+          isOpen={isBulkModalOpen}
+          onClose={() => setIsBulkModalOpen(false)}
+          onSuccess={() => {
+            setIsBulkModalOpen(false);
+            fetchFDRs();
+          }}
+        />
+      )}
     </div>
   );
 };

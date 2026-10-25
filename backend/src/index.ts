@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { initializeDatabase } from './db/database';
 import { startCronJobs } from './services/cronService';
+import { securityHeaders, apiLimiter } from './middleware/security';
 
 import authRoutes from './routes/auth';
 import fdrRoutes from './routes/fdrs';
@@ -13,13 +14,22 @@ import releaseRoutes from './routes/releases';
 import reportRoutes from './routes/reports';
 import disputeRoutes from './routes/disputes';
 import notificationRoutes from './routes/notifications';
+import invocationRoutes from './routes/invocations';
+import certificateRoutes from './routes/certificates';
+import bulkRoutes from './routes/bulk';
+import documentRoutes from './routes/documents';
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
-// Middlewares
+// Production Security Headers & Rate Limiting
+app.use(securityHeaders);
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+// Apply general API rate limiting
+app.use('/api', apiLimiter);
 
 // Serve uploaded documents statically (supporting /tmp on Vercel)
 const uploadsDir = process.env.VERCEL ? path.join('/tmp', 'uploads') : path.join(__dirname, '../uploads');
@@ -37,6 +47,10 @@ app.use('/api/releases', releaseRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/invocations', invocationRoutes);
+app.use('/api/certificates', certificateRoutes);
+app.use('/api/bulk', bulkRoutes);
+app.use('/api/documents', documentRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

@@ -2,13 +2,13 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from '../db/database';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, JWT_SECRET } from '../middleware/auth';
+import { authLimiter } from '../middleware/security';
 
 const router = express.Router();
-const JWT_SECRET = 'aicte-fdr-secret-key-2024';
 
-// POST /api/auth/login
-router.post('/login', (req, res) => {
+// POST /api/auth/login (with rate limiting against brute-force)
+router.post('/login', authLimiter, (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });

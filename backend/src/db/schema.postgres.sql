@@ -130,6 +130,55 @@ CREATE TABLE IF NOT EXISTS audit_log (
   notes TEXT
 );
 
+CREATE TABLE IF NOT EXISTS lien_invocations (
+  id SERIAL PRIMARY KEY,
+  fdr_id INTEGER NOT NULL REFERENCES fdrs(id) ON DELETE CASCADE,
+  institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+  invocation_ref VARCHAR(100) UNIQUE NOT NULL,
+  reason_code VARCHAR(100) NOT NULL,
+  justification TEXT NOT NULL,
+  demand_amount NUMERIC(15, 2) NOT NULL,
+  status VARCHAR(50) DEFAULT 'Initiated',
+  show_cause_ref VARCHAR(100),
+  show_cause_issued_at TIMESTAMP,
+  show_cause_deadline DATE,
+  bank_demand_ref VARCHAR(100),
+  bank_demand_served_at TIMESTAMP,
+  recovery_utr_challan VARCHAR(100),
+  recovery_date DATE,
+  initiated_by INTEGER REFERENCES users(id),
+  initiated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  approved_by INTEGER REFERENCES users(id),
+  approved_at TIMESTAMP,
+  dsc_sign_hash TEXT,
+  remarks TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bulk_ingestion_jobs (
+  id SERIAL PRIMARY KEY,
+  file_name VARCHAR(255) NOT NULL,
+  total_rows INTEGER NOT NULL,
+  success_count INTEGER DEFAULT 0,
+  error_count INTEGER DEFAULT 0,
+  status VARCHAR(50) DEFAULT 'Completed',
+  summary_log TEXT,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS statutory_certificates (
+  id SERIAL PRIMARY KEY,
+  certificate_type VARCHAR(100) NOT NULL,
+  fdr_id INTEGER NOT NULL REFERENCES fdrs(id) ON DELETE CASCADE,
+  institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+  certificate_number VARCHAR(100) UNIQUE NOT NULL,
+  qr_code_data TEXT NOT NULL,
+  dsc_sign_hash TEXT,
+  signer_designation VARCHAR(100),
+  issued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  issued_by INTEGER REFERENCES users(id)
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_fdrs_institution ON fdrs(institution_id);
 CREATE INDEX IF NOT EXISTS idx_fdrs_maturity ON fdrs(maturity_date);

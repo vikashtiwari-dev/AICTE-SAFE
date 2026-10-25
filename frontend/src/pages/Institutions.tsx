@@ -1,42 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import api from '../api/client';
-import { Institution, InstitutionRequest, FDR } from '../types';
-import {
-  Building2,
-  Search,
-  MapPin,
-  Phone,
-  Mail,
-  Plus,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  FileText,
-  ArrowLeft,
-  Landmark,
-  ShieldCheck,
-  Calendar,
-  Wallet,
-  Eye,
-  FileSpreadsheet
-} from 'lucide-react';
+import { Institution, InstitutionRequest } from '../types';
+import { Building2, Search, MapPin, Phone, Mail, Plus, Clock, CheckCircle2, XCircle, AlertCircle, FileText } from 'lucide-react';
 import { Modal } from '../components/ui/Modal';
-import { Badge } from '../components/ui/Badge';
 import { InstitutionRequestModal } from '../components/InstitutionRequestModal';
 import { useAuth } from '../hooks/useAuth';
 
 export const Institutions: React.FC = () => {
-  const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'directory' | 'requests'>('directory');
   
-  // Single Institution Profile state (when id param is present)
-  const [profileInst, setProfileInst] = useState<Institution | null>(null);
-  const [profileFdrs, setProfileFdrs] = useState<FDR[]>([]);
-  const [profileLoading, setProfileLoading] = useState(false);
-
   // Directory state
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,32 +43,11 @@ export const Institutions: React.FC = () => {
   const isBureauOrAdmin = user?.role === 'admin' || user?.role === 'bureau_officer';
 
   useEffect(() => {
-    if (id) {
-      fetchInstitutionProfile(id);
-    } else {
-      fetchInstitutions();
-      if (isBureauOrAdmin) {
-        fetchRequests();
-      }
+    fetchInstitutions();
+    if (isBureauOrAdmin) {
+      fetchRequests();
     }
-  }, [id, isBureauOrAdmin]);
-
-  const fetchInstitutionProfile = async (instId: string) => {
-    try {
-      setProfileLoading(true);
-      const [instRes, fdrsRes] = await Promise.all([
-        api.get(`/institutions/${instId}`),
-        api.get(`/fdrs?institution_id=${instId}`),
-      ]);
-      setProfileInst(instRes.data);
-      const fdrList = fdrsRes.data?.fdrs || (Array.isArray(fdrsRes.data) ? fdrsRes.data : []);
-      setProfileFdrs(fdrList);
-    } catch (err) {
-      console.error('Failed to load institution profile:', err);
-    } finally {
-      setProfileLoading(false);
-    }
-  };
+  }, [isBureauOrAdmin]);
 
   const fetchInstitutions = async () => {
     try {
@@ -191,249 +144,6 @@ export const Institutions: React.FC = () => {
   );
 
   const formatCurrency = (amt?: number) => '₹' + (amt || 0).toLocaleString('en-IN');
-
-  // If viewing an individual technical institution's profile
-  if (id) {
-    if (profileLoading) {
-      return (
-        <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-4"></div>
-          <p className="text-sm font-semibold text-slate-600">Loading Technical Institution Profile & Deposits...</p>
-        </div>
-      );
-    }
-
-    if (!profileInst) {
-      return (
-        <div className="bg-white rounded-xl border border-slate-200 p-12 text-center max-w-md mx-auto my-12 space-y-4">
-          <AlertCircle className="w-12 h-12 text-rose-500 mx-auto" />
-          <h3 className="text-base font-bold text-slate-800">Institution Not Found</h3>
-          <p className="text-xs text-slate-500">The institution with ID #{id} could not be located in the council database.</p>
-          <Link
-            to="/institutions"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to Directory
-          </Link>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-6">
-        {/* Top Bar with Return Link */}
-        <div className="flex items-center justify-between">
-          <Link
-            to="/institutions"
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:text-blue-600 shadow-2xs transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to Technical Institutions Directory
-          </Link>
-          <span className="text-xs font-mono text-slate-400">Record ID: #{profileInst.id}</span>
-        </div>
-
-        {/* Profile Header Banner */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="p-3.5 bg-blue-50 text-blue-700 rounded-xl border border-blue-100 shrink-0">
-                <Building2 className="w-8 h-8" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-xl font-bold text-slate-900">{profileInst.name}</h2>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                    {profileInst.institution_type}
-                  </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    APH Approved
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1 flex items-center gap-3 flex-wrap">
-                  <span>AICTE Permanent ID: <strong className="font-mono text-slate-700">{profileInst.aicte_id}</strong></span>
-                  <span>•</span>
-                  <span className="flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                    {profileInst.city ? `${profileInst.city}, ${profileInst.state}` : profileInst.state}
-                  </span>
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* KPI Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-semibold">Total Security Deposit</span>
-              <Wallet className="w-4 h-4 text-blue-600" />
-            </div>
-            <p className="text-xl font-bold text-slate-900">{formatCurrency(profileInst.total_deposit_amount)}</p>
-            <p className="text-[10px] text-slate-400 mt-1">{profileFdrs.length} Instruments Registered</p>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-semibold">Active Compliant FDRs</span>
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            </div>
-            <p className="text-xl font-bold text-emerald-700">
-              {profileInst.active_fdrs ?? profileFdrs.filter(f => f.status === 'Active').length}
-            </p>
-            <p className="text-[10px] text-emerald-600 mt-1">Under Active AICTE Joint Lien</p>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-semibold">Expiring Soon (&lt; 60 Days)</span>
-              <Clock className="w-4 h-4 text-amber-600" />
-            </div>
-            <p className="text-xl font-bold text-amber-600">
-              {profileInst.expiring_soon_fdrs ?? profileFdrs.filter(f => f.status === 'Expiring Soon').length}
-            </p>
-            <p className="text-[10px] text-amber-600 mt-1">Nudges / Reminders Triggered</p>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-            <div className="flex items-center justify-between text-slate-500 mb-1">
-              <span className="text-xs font-semibold">APH Regulatory Health</span>
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            </div>
-            <p className="text-xl font-bold text-emerald-600">
-              {profileInst.expiring_soon_fdrs && profileInst.expiring_soon_fdrs > 0 ? 'Action Needed' : 'Good Standing'}
-            </p>
-            <p className="text-[10px] text-slate-400 mt-1">100% Financial Deposit Ratio</p>
-          </div>
-        </div>
-
-        {/* Main Grid: FDR Instruments Table & Institution Details */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* FDR Instruments List */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-800">Linked Security Deposit Instruments (FDRs)</h3>
-                  <p className="text-xs text-slate-400">Fixed Deposit Receipts pledged under Approval Process Handbook (APH)</p>
-                </div>
-                <span className="text-xs font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">
-                  {profileFdrs.length} Deposits
-                </span>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50/75 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      <th className="py-3 px-4">FDR Number</th>
-                      <th className="py-3 px-4">Issuing Bank &amp; Branch</th>
-                      <th className="py-3 px-4">Amount (₹)</th>
-                      <th className="py-3 px-4">Maturity Date</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {profileFdrs.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="py-12 text-center text-slate-400">
-                          <FileSpreadsheet className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-                          <p className="font-semibold text-slate-600">No FDRs registered for this institution.</p>
-                        </td>
-                      </tr>
-                    ) : (
-                      profileFdrs.map((fdr) => (
-                        <tr key={fdr.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="py-3.5 px-4 font-mono font-bold text-blue-700">
-                            <Link to={`/fdrs/${fdr.id}`} className="hover:underline">
-                              {fdr.fdr_number}
-                            </Link>
-                            <span className="text-[10px] text-slate-400 block font-sans font-normal">
-                              {fdr.deposit_type || 'FDR'}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <p className="font-semibold text-slate-800">{fdr.bank_name}</p>
-                            <span className="text-[10px] text-slate-400">{fdr.bank_branch || 'Main Branch'}</span>
-                          </td>
-                          <td className="py-3.5 px-4 font-bold text-slate-900">
-                            {formatCurrency(fdr.deposit_amount)}
-                          </td>
-                          <td className="py-3.5 px-4 text-slate-600">
-                            {fdr.maturity_date}
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <Badge status={fdr.status} />
-                          </td>
-                          <td className="py-3.5 px-4 text-right">
-                            <Link
-                              to={`/fdrs/${fdr.id}`}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 rounded transition-colors"
-                            >
-                              <Eye className="w-3.5 h-3.5" /> View
-                            </Link>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          {/* Institution Dossier Sidebar */}
-          <div className="space-y-4">
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
-              <h3 className="text-sm font-bold text-slate-800 border-b border-slate-100 pb-2">
-                Institutional Dossier &amp; Contacts
-              </h3>
-
-              <div className="space-y-3 text-xs">
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-semibold uppercase">Principal / Head</span>
-                  <p className="font-semibold text-slate-800">{profileInst.contact_person || 'Not Specified'}</p>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-semibold uppercase">Official Email</span>
-                  <a href={`mailto:${profileInst.contact_email}`} className="text-blue-600 hover:underline flex items-center gap-1.5 mt-0.5">
-                    <Mail className="w-3.5 h-3.5 text-slate-400" />
-                    {profileInst.contact_email}
-                  </a>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-semibold uppercase">Telephone</span>
-                  <p className="text-slate-700 flex items-center gap-1.5 mt-0.5">
-                    <Phone className="w-3.5 h-3.5 text-slate-400" />
-                    {profileInst.contact_phone || 'Not Specified'}
-                  </p>
-                </div>
-
-                <div>
-                  <span className="text-slate-400 block text-[10px] font-semibold uppercase">Campus Address</span>
-                  <p className="text-slate-700 flex items-start gap-1.5 mt-0.5 leading-relaxed">
-                    <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                    {profileInst.address ? `${profileInst.address}, ${profileInst.city || ''}, ${profileInst.state}` : `${profileInst.city || ''}, ${profileInst.state}`}
-                  </p>
-                </div>
-
-                <div className="pt-2 border-t border-slate-100">
-                  <span className="text-slate-400 block text-[10px] font-semibold uppercase">Approval Status</span>
-                  <p className="text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    Recognized Technical Institution
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">

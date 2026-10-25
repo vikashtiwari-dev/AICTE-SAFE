@@ -50,7 +50,7 @@ export const Login: React.FC = () => {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white shadow-lg mb-4 ring-8 ring-blue-600/20">
             <ShieldCheck className="w-9 h-9" />
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">AICTE-SAFE</h1>
+          <h1 className="text-2xl font-bold text-white tracking-tight">AICTE SAFE</h1>
           <p className="text-blue-400 font-semibold text-xs tracking-wider uppercase mt-1">
             Secure Automated FDR & Deposit Engine
           </p>

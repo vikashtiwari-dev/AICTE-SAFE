@@ -36,7 +36,7 @@ app.use('/api/reports', reportRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'AICTE-SAFE: Secure Automated FDR & Deposit Engine', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', service: 'AICTE SAFE: Secure Automated FDR & Deposit Engine', timestamp: new Date().toISOString() });
 });
 
 // Serve frontend static build if available
@@ -51,7 +51,7 @@ if (fs.existsSync(frontendDist)) {
 // Start server if not imported as serverless handler
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AICTE-SAFE Engine running on http://0.0.0.0:${PORT}`);
+    console.log(`🚀 AICTE SAFE Engine running on http://0.0.0.0:${PORT}`);
     startCronJobs();
   });
 }

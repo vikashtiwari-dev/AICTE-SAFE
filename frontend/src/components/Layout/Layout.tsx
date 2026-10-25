@@ -15,7 +15,7 @@ export const Layout: React.FC = () => {
     if (path.startsWith('/alerts')) return 'Maturity & Compliance Alerts';
     if (path.startsWith('/releases')) return 'Release & Refund Workflow';
     if (path.startsWith('/reports')) return 'Regulatory Audit & Analytics';
-    return 'AICTE-SAFE Engine';
+    return 'AICTE SAFE Engine';
   };
 
   return (

@@ -32,7 +32,7 @@ export const Sidebar: React.FC = () => {
           <ShieldCheck className="w-6 h-6" />
         </div>
         <div>
-          <h1 className="text-base font-bold text-white tracking-wide">AICTE-SAFE</h1>
+          <h1 className="text-base font-bold text-white tracking-wide">AICTE SAFE</h1>
           <p className="text-[10px] text-blue-400 font-semibold tracking-wider uppercase">FDR & Deposit Engine</p>
         </div>
       </div>

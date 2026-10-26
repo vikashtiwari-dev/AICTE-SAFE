@@ -40,6 +40,11 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
+  // When running on Vercel, if req.body is already parsed by runtime, mark req._body = true to avoid express body-parser hanging on drained stream
+  if (req.body && typeof req.body === 'object') {
+    (req as any)._body = true;
+  }
+
   if (typeof app === 'function') {
     return app(req as any, res as any);
   }

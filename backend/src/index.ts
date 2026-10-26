@@ -27,6 +27,9 @@ import documentRoutes from './routes/documents';
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
+// Trust reverse proxy in serverless environments (Vercel, AWS Lambda, Cloudflare)
+app.set('trust proxy', 1);
+
 // Production Security Headers & Strict Origin Restriction
 app.use(securityHeaders);
 
@@ -52,6 +55,15 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
+
+// Avoid stream drain hangs in serverless environments when body is pre-parsed by runtime
+app.use((req: any, _res: any, next: any) => {
+  if (req.body && typeof req.body === 'object') {
+    req._body = true;
+  }
+  next();
+});
+
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 

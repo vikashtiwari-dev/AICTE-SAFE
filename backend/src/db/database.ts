@@ -21,7 +21,7 @@ export interface DBInterface {
 }
 
 let pgPool: Pool | null = null;
-const dbUrl = process.env.DATABASE_URL;
+const dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_DATABASE_URL || process.env.POSTGRES_URL;
 
 if (dbUrl) {
   try {

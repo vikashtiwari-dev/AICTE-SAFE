@@ -48,7 +48,7 @@ function numberToIndianWords(num: number): string {
 router.get('/:formType/:fdrId', authenticate, async (req: AuthRequest, res) => {
   const { formType, fdrId } = req.params;
 
-  const fdr = db.prepare(`
+  const fdr = await db.prepare(`
     SELECT f.*, i.name as institution_name, i.aicte_id, i.address, i.city, i.state
     FROM fdrs f
     JOIN institutions i ON f.institution_id = i.id
@@ -121,13 +121,13 @@ router.get('/:formType/:fdrId', authenticate, async (req: AuthRequest, res) => {
   }
 
   // Check or save to database
-  const existingCert = db.prepare('SELECT * FROM statutory_certificates WHERE certificate_number = ?').get(certNumber);
+  const existingCert = await db.prepare('SELECT * FROM statutory_certificates WHERE certificate_number = ?').get(certNumber);
   if (!existingCert) {
     try {
-      db.prepare(`
-        INSERT INTO statutory_certificates (certificate_type, fdr_id, institution_id, certificate_number, qr_code_data, dsc_sign_hash, signer_designation, issued_by)
-        VALUES (?, ?, ?, ?, ?, ?, 'Adviser (Approval Bureau), AICTE', ?)
-      `).run(certTypeKey, fdr.id, fdr.institution_id, certNumber, qrVerificationPayload, dscHash, req.user!.userId);
+      await db.prepare(`
+        INSERT INTO statutory_certificates (certificate_type, fdr_id, institution_id, certificate_number, qr_verification_code, dsc_officer_name, dsc_officer_designation, pdf_payload)
+        VALUES (?, ?, ?, ?, ?, 'Dr. Ramesh K. Unnikrishnan', 'Adviser (Approval Bureau), AICTE', ?)
+      `).run(certTypeKey, fdr.id, fdr.institution_id, certNumber, dscHash, qrVerificationPayload);
     } catch (_) {}
   }
 
@@ -155,9 +155,9 @@ router.get('/:formType/:fdrId', authenticate, async (req: AuthRequest, res) => {
 });
 
 // GET /api/certificates/verify/:certNumber - Public verification check
-router.get('/verify/:certNumber', (req, res) => {
+router.get('/verify/:certNumber', async (req, res) => {
   const certNumber = decodeURIComponent(req.params.certNumber);
-  const cert = db.prepare(`
+  const cert = await db.prepare(`
     SELECT sc.*, f.fdr_number, f.deposit_amount, f.bank_name, i.name as inst_name, i.aicte_id
     FROM statutory_certificates sc
     JOIN fdrs f ON sc.fdr_id = f.id

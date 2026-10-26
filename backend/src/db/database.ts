@@ -1,23 +1,30 @@
 import path from 'path';
 import fs from 'fs';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const { DatabaseSync } = require('node:sqlite');
-
 export interface DBStatement {
-  all(...params: any[]): any[];
-  get(...params: any[]): any;
-  run(...params: any[]): { changes: number; lastInsertRowid: number };
+  all(...params: any[]): Promise<any[]>;
+  get(...params: any[]): Promise<any>;
+  run(...params: any[]): Promise<{ changes: number; lastInsertRowid: number }>;
+}
+
+export interface DBTransaction {
+  query<T = any>(sql: string, params?: any[]): Promise<T[]>;
+  queryOne<T = any>(sql: string, params?: any[]): Promise<T | null>;
+  execute(sql: string, params?: any[]): Promise<{ changes: number; lastInsertRowid: number }>;
 }
 
 export interface DBInterface {
   isPostgres: boolean;
-  exec(sql: string): void;
+  pgPool: Pool | null;
+  query<T = any>(sql: string, params?: any[]): Promise<T[]>;
+  queryOne<T = any>(sql: string, params?: any[]): Promise<T | null>;
+  execute(sql: string, params?: any[]): Promise<{ changes: number; lastInsertRowid: number }>;
+  transaction<T>(callback: (tx: DBTransaction) => Promise<T>): Promise<T>;
   prepare(sql: string): DBStatement;
-  pragma?(cmd: string): void;
-  pgPool?: Pool | null;
+  exec(sql: string): Promise<void>;
 }
 
 let pgPool: Pool | null = null;
@@ -32,7 +39,6 @@ const rawDbUrl =
     : '');
 
 if (rawDbUrl) {
-  // Supabase pooler uses custom AWS TLS certificates in serverless environments
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   try {
     let cleanDbUrl = rawDbUrl;
@@ -49,85 +55,198 @@ if (rawDbUrl) {
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 7000,
     });
-    console.log('✅ PostgreSQL / Supabase Pool connected for cloud persistence');
+    console.log('✅ PostgreSQL is configured as the SOLE SOURCE OF TRUTH (Pool connected)');
   } catch (poolErr: any) {
     console.warn('⚠️ Cloud PostgreSQL pool initialization notice:', poolErr.message);
   }
 }
 
-// Synchronous bridge database proxy supporting both SQLite and PostgreSQL replication
-export function createDB(): DBInterface {
-  const DB_PATH = process.env.VERCEL
-    ? path.join('/tmp', 'aicte_fdr.db')
-    : path.join(__dirname, '../../data/aicte_fdr.db');
-  const dataDir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
+/**
+ * Normalizes SQL queries and parameter bindings for PostgreSQL:
+ * - Translates ? to $1, $2, ...
+ * - Translates datetime('now') to CURRENT_TIMESTAMP
+ * - Appends RETURNING id on INSERT statements when not present to capture primary keys
+ */
+export function convertSql(sql: string): { pgSql: string; isInsert: boolean } {
+  let idx = 1;
+  let converted = sql.replace(/datetime\('now'\)/gi, 'CURRENT_TIMESTAMP');
+  converted = converted.replace(/\?/g, () => '$' + (idx++));
+  const trimmed = converted.trim();
+  const upper = trimmed.toUpperCase();
+  const isInsert = upper.startsWith('INSERT');
+  if (isInsert && !upper.includes('RETURNING') && !upper.includes('DO NOTHING')) {
+    converted = `${trimmed} RETURNING id`;
   }
+  return { pgSql: converted, isInsert };
+}
 
-  if (process.env.VERCEL) {
-    const bundledDb = path.join(__dirname, '../../data/aicte_fdr.db');
-    if (fs.existsSync(bundledDb) && !fs.existsSync(DB_PATH)) {
-      try {
-        fs.copyFileSync(bundledDb, DB_PATH);
-      } catch (e) {
-        console.warn('Could not copy bundled SQLite database to /tmp', e);
-      }
+async function runPgQuery(clientOrPool: Pool | PoolClient, sql: string, params: any[] = []) {
+  const { pgSql, isInsert } = convertSql(sql);
+  const sanitizedParams = params.map(p => (p === undefined ? null : p));
+  try {
+    const res = await clientOrPool.query(pgSql, sanitizedParams);
+    const lastInsertRowid = (isInsert && res.rows.length > 0 && res.rows[0].id !== undefined)
+      ? Number(res.rows[0].id)
+      : 0;
+    return {
+      rows: res.rows,
+      changes: res.rowCount ?? 0,
+      lastInsertRowid,
+    };
+  } catch (err: any) {
+    // If RETURNING id failed because table lacks an 'id' column, retry without RETURNING id
+    if (isInsert && err.message && err.message.includes('column "id" does not exist')) {
+      const plainPgSql = convertSql(sql).pgSql.replace(/\s+RETURNING id$/i, '');
+      const res = await clientOrPool.query(plainPgSql, sanitizedParams);
+      return {
+        rows: res.rows,
+        changes: res.rowCount ?? 0,
+        lastInsertRowid: 0,
+      };
     }
+    throw err;
+  }
+}
+
+// Optional SQLite fallback driver ONLY for local offline development without internet/PostgreSQL credentials
+let sqliteInstance: any = null;
+function getSqliteFallback() {
+  if (!sqliteInstance) {
+    const { DatabaseSync } = require('node:sqlite');
+    const localDbPath = path.join(__dirname, '../../data/aicte_fdr.db');
+    const dataDir = path.dirname(localDbPath);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    sqliteInstance = new DatabaseSync(localDbPath);
+  }
+  return sqliteInstance;
+}
+
+export function createDB(): DBInterface {
+  const isPostgres = Boolean(pgPool);
+
+  if (isPostgres) {
+    return {
+      isPostgres: true,
+      pgPool,
+      async query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+        const res = await runPgQuery(pgPool!, sql, params);
+        return res.rows as T[];
+      },
+      async queryOne<T = any>(sql: string, params: any[] = []): Promise<T | null> {
+        const res = await runPgQuery(pgPool!, sql, params);
+        return (res.rows[0] as T) || null;
+      },
+      async execute(sql: string, params: any[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
+        const res = await runPgQuery(pgPool!, sql, params);
+        return { changes: res.changes, lastInsertRowid: res.lastInsertRowid };
+      },
+      async transaction<T>(callback: (tx: DBTransaction) => Promise<T>): Promise<T> {
+        const client = await pgPool!.connect();
+        try {
+          await client.query('BEGIN');
+          const tx: DBTransaction = {
+            async query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+              const res = await runPgQuery(client, sql, params);
+              return res.rows as T[];
+            },
+            async queryOne<T = any>(sql: string, params: any[] = []): Promise<T | null> {
+              const res = await runPgQuery(client, sql, params);
+              return (res.rows[0] as T) || null;
+            },
+            async execute(sql: string, params: any[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
+              const res = await runPgQuery(client, sql, params);
+              return { changes: res.changes, lastInsertRowid: res.lastInsertRowid };
+            },
+          };
+          const result = await callback(tx);
+          await client.query('COMMIT');
+          return result;
+        } catch (err) {
+          await client.query('ROLLBACK');
+          throw err;
+        } finally {
+          client.release();
+        }
+      },
+      prepare(sql: string): DBStatement {
+        return {
+          async all(...params: any[]) {
+            const res = await runPgQuery(pgPool!, sql, params);
+            return res.rows;
+          },
+          async get(...params: any[]) {
+            const res = await runPgQuery(pgPool!, sql, params);
+            return res.rows[0] || null;
+          },
+          async run(...params: any[]) {
+            const res = await runPgQuery(pgPool!, sql, params);
+            return { changes: res.changes, lastInsertRowid: res.lastInsertRowid };
+          },
+        };
+      },
+      async exec(sql: string): Promise<void> {
+        await pgPool!.query(sql);
+      },
+    };
   }
 
-  const sqlite = new DatabaseSync(DB_PATH);
-
+  // Fallback for purely offline local environments without PostgreSQL
+  const sqlite = getSqliteFallback();
   return {
-    isPostgres: Boolean(pgPool),
-    pgPool,
-    exec(sql: string) {
-      sqlite.exec(sql);
-      if (pgPool && !sql.toUpperCase().includes('PRAGMA') && !sql.toUpperCase().includes('AUTOINCREMENT')) {
-        pgPool.query(sql).catch((err: any) => {
-          // Non-blocking background sync
-        });
+    isPostgres: false,
+    pgPool: null,
+    async query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+      return sqlite.prepare(sql).all(...params) as T[];
+    },
+    async queryOne<T = any>(sql: string, params: any[] = []): Promise<T | null> {
+      return (sqlite.prepare(sql).get(...params) as T) || null;
+    },
+    async execute(sql: string, params: any[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
+      const res = sqlite.prepare(sql).run(...params);
+      return { changes: res.changes, lastInsertRowid: Number(res.lastInsertRowid) };
+    },
+    async transaction<T>(callback: (tx: DBTransaction) => Promise<T>): Promise<T> {
+      sqlite.exec('BEGIN TRANSACTION;');
+      try {
+        const tx: DBTransaction = {
+          async query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
+            return sqlite.prepare(sql).all(...params) as T[];
+          },
+          async queryOne<T = any>(sql: string, params: any[] = []): Promise<T | null> {
+            return (sqlite.prepare(sql).get(...params) as T) || null;
+          },
+          async execute(sql: string, params: any[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
+            const res = sqlite.prepare(sql).run(...params);
+            return { changes: res.changes, lastInsertRowid: Number(res.lastInsertRowid) };
+          },
+        };
+        const result = await callback(tx);
+        sqlite.exec('COMMIT;');
+        return result;
+      } catch (err) {
+        sqlite.exec('ROLLBACK;');
+        throw err;
       }
     },
     prepare(sql: string): DBStatement {
       const stmt = sqlite.prepare(sql);
       return {
-        all(...params: any[]) {
+        async all(...params: any[]) {
           return stmt.all(...params);
         },
-        get(...params: any[]) {
+        async get(...params: any[]) {
           return stmt.get(...params);
         },
-        run(...params: any[]) {
+        async run(...params: any[]) {
           const res = stmt.run(...params);
-
-          // Replicate write mutations (INSERT, UPDATE, DELETE) to Cloud Supabase
-          if (pgPool) {
-            const upper = sql.trim().toUpperCase();
-            if (upper.startsWith('INSERT') || upper.startsWith('UPDATE') || upper.startsWith('DELETE')) {
-              try {
-                let idx = 1;
-                const pgSql = sql.replace(/\?/g, () => '$' + (idx++));
-                // Convert Date objects or boolean numbers if needed
-                const sanitizedParams = params.map(p => (p === undefined ? null : p));
-                pgPool.query(pgSql, sanitizedParams).catch((err: any) => {
-                  console.warn('Supabase cloud replication note:', err.message);
-                });
-              } catch (replErr: any) {
-                console.warn('Supabase replication format note:', replErr.message);
-              }
-            }
-          }
-
-          return {
-            changes: res.changes,
-            lastInsertRowid: res.lastInsertRowid,
-          };
+          return { changes: res.changes, lastInsertRowid: Number(res.lastInsertRowid) };
         },
       };
     },
-    pragma(cmd: string) {
-      sqlite.exec(`PRAGMA ${cmd};`);
+    async exec(sql: string): Promise<void> {
+      sqlite.exec(sql);
     },
   };
 }
@@ -135,322 +254,273 @@ export function createDB(): DBInterface {
 export const db = createDB();
 
 /**
- * Executes a write mutation (INSERT, UPDATE, DELETE) transactionally against
- * the cloud PostgreSQL/Supabase database when connected, ensuring true durability,
- * and maintains the local cache immediately.
+ * Directly executes a write mutation (INSERT, UPDATE, DELETE) against the sole authoritative database.
  */
 export async function executeMutation(sql: string, params: any[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
-  if (pgPool) {
+  return db.execute(sql, params);
+}
+
+/**
+ * Initializes schema and default seed data directly in PostgreSQL (or offline fallback).
+ * Guarantees that all required tables exist and are verified.
+ */
+export async function initializeDatabase() {
+  if (db.isPostgres && pgPool) {
+    console.log('🔄 Verifying and initializing PostgreSQL authoritative schema...');
     try {
-      let idx = 1;
-      const pgSql = sql.replace(/\?/g, () => '$' + (idx++));
-      const sanitizedParams = params.map(p => (p === undefined ? null : p));
-      await pgPool.query(pgSql, sanitizedParams);
-    } catch (pgErr: any) {
-      console.error('❌ Cloud PostgreSQL write failed:', pgErr.message);
-      throw new Error(`Durable Cloud Database Write Failed: ${pgErr.message}`);
-    }
-  }
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          username VARCHAR(100) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          full_name VARCHAR(255) NOT NULL,
+          email VARCHAR(255) UNIQUE NOT NULL,
+          role VARCHAR(50) NOT NULL DEFAULT 'viewer',
+          institution_id INTEGER,
+          is_active INTEGER DEFAULT 1,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          last_login TIMESTAMP WITH TIME ZONE
+        );
 
-  // Also apply to local SQLite cache
-  const stmt = db.prepare(sql);
-  return stmt.run(...params);
-}
+        CREATE TABLE IF NOT EXISTS institutions (
+          id SERIAL PRIMARY KEY,
+          aicte_id VARCHAR(100) UNIQUE NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          address TEXT,
+          state VARCHAR(100),
+          city VARCHAR(100),
+          contact_person VARCHAR(255),
+          contact_email VARCHAR(255),
+          contact_phone VARCHAR(50),
+          institution_type VARCHAR(100) DEFAULT 'Technical University',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
-// Cloud hydration: Sync latest records from Supabase PostgreSQL into local SQLite
-export async function syncFromSupabase() {
-  if (!pgPool) return;
-  try {
-    console.log('🔄 Checking Supabase PostgreSQL cloud sync...');
+        CREATE TABLE IF NOT EXISTS institution_requests (
+          id SERIAL PRIMARY KEY,
+          aicte_id VARCHAR(100) UNIQUE NOT NULL,
+          name VARCHAR(255) NOT NULL,
+          address TEXT,
+          state VARCHAR(100),
+          city VARCHAR(100),
+          contact_person VARCHAR(255),
+          contact_email VARCHAR(255),
+          contact_phone VARCHAR(50),
+          institution_type VARCHAR(100) DEFAULT 'Technical University',
+          status VARCHAR(50) NOT NULL DEFAULT 'Pending',
+          requested_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          reviewed_by INTEGER,
+          reviewed_at TIMESTAMP WITH TIME ZONE,
+          rejection_reason TEXT
+        );
 
-    // 0. Sync Users
-    const pgUsers = await pgPool.query('SELECT * FROM users ORDER BY id ASC');
-    if (pgUsers.rows.length > 0) {
-      for (const u of pgUsers.rows) {
-        try {
-          db.prepare(`
-            INSERT OR REPLACE INTO users (id, username, password_hash, full_name, email, role, institution_id, is_active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(u.id, u.username, u.password_hash, u.full_name, u.email, u.role, u.institution_id || null, u.is_active ?? 1);
-        } catch (_) {}
-      }
-      console.log(`✅ Synced ${pgUsers.rows.length} users from Supabase cloud`);
-    }
+        CREATE TABLE IF NOT EXISTS fdrs (
+          id SERIAL PRIMARY KEY,
+          institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+          fdr_number VARCHAR(100) UNIQUE NOT NULL,
+          bank_name VARCHAR(255) NOT NULL,
+          bank_branch VARCHAR(255),
+          account_number VARCHAR(100),
+          deposit_amount NUMERIC(15, 2) NOT NULL,
+          currency VARCHAR(10) DEFAULT 'INR',
+          issue_date DATE NOT NULL,
+          maturity_date DATE NOT NULL,
+          interest_rate NUMERIC(5, 2),
+          deposit_type VARCHAR(50) DEFAULT 'FDR',
+          purpose TEXT,
+          status VARCHAR(50) NOT NULL DEFAULT 'Active',
+          verification_status VARCHAR(50) DEFAULT 'Unverified',
+          verification_notes TEXT,
+          verified_by INTEGER,
+          verified_at TIMESTAMP WITH TIME ZONE,
+          submitted_by INTEGER,
+          submitted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          last_updated_by INTEGER,
+          last_updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          remarks TEXT,
+          is_renewal INTEGER DEFAULT 0,
+          parent_fdr_id INTEGER
+        );
 
-    // 1. Sync institutions
-    const pgInsts = await pgPool.query('SELECT * FROM institutions ORDER BY id ASC');
-    if (pgInsts.rows.length > 0) {
-      for (const inst of pgInsts.rows) {
-        try {
-          db.prepare(`
-            INSERT OR IGNORE INTO institutions (id, aicte_id, name, address, state, city, contact_person, contact_email, contact_phone, institution_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            inst.id,
-            inst.aicte_id,
-            inst.name,
-            inst.address || '',
-            inst.state || '',
-            inst.city || '',
-            inst.contact_person || '',
-            inst.contact_email || '',
-            inst.contact_phone || '',
-            inst.institution_type || 'Technical University'
-          );
-        } catch (_) {}
-      }
-      console.log(`✅ Synced ${pgInsts.rows.length} institutions from Supabase cloud`);
-    }
+        CREATE TABLE IF NOT EXISTS fdr_documents (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER NOT NULL REFERENCES fdrs(id) ON DELETE CASCADE,
+          document_type VARCHAR(100) NOT NULL,
+          file_name VARCHAR(255) NOT NULL,
+          file_path TEXT NOT NULL,
+          file_size INTEGER,
+          mime_type VARCHAR(100),
+          sha256_hash VARCHAR(64),
+          verified_on_chain INTEGER DEFAULT 1,
+          uploaded_by INTEGER,
+          uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          is_active INTEGER DEFAULT 1
+        );
 
-    // 2. Sync FDRs
-    const pgFdrs = await pgPool.query('SELECT * FROM fdrs ORDER BY id ASC');
-    if (pgFdrs.rows.length > 0) {
-      for (const f of pgFdrs.rows) {
-        try {
-          db.prepare(`
-            INSERT OR REPLACE INTO fdrs (
-              id, institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount,
-              currency, issue_date, maturity_date, interest_rate, deposit_type, purpose, status,
-              verification_status, verification_notes, verified_by, verified_at, submitted_by,
-              submitted_at, last_updated_by, last_updated_at, remarks, is_renewal, parent_fdr_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
-            f.id,
-            f.institution_id,
-            f.fdr_number,
-            f.bank_name,
-            f.bank_branch || '',
-            f.account_number || '',
-            parseFloat(f.deposit_amount) || 0,
-            f.currency || 'INR',
-            f.issue_date instanceof Date ? f.issue_date.toISOString().split('T')[0] : (f.issue_date || '2024-01-01'),
-            f.maturity_date instanceof Date ? f.maturity_date.toISOString().split('T')[0] : (f.maturity_date || '2027-01-01'),
-            parseFloat(f.interest_rate) || 7.0,
-            f.deposit_type || 'FDR',
-            f.purpose || '',
-            f.status || 'Active',
-            f.verification_status || 'Verified',
-            f.verification_notes || '',
-            f.verified_by || null,
-            f.verified_at ? String(f.verified_at) : null,
-            f.submitted_by || 1,
-            f.submitted_at ? String(f.submitted_at) : null,
-            f.last_updated_by || null,
-            f.last_updated_at ? String(f.last_updated_at) : null,
-            f.remarks || '',
-            f.is_renewal ? 1 : 0,
-            f.parent_fdr_id || null
-          );
-        } catch (_) {}
-      }
-      console.log(`✅ Synced ${pgFdrs.rows.length} FDRs from Supabase cloud`);
-    }
-  } catch (syncErr: any) {
-    console.warn('⚠️ Supabase cloud sync non-blocking notice:', syncErr.message);
-  }
-}
+        CREATE TABLE IF NOT EXISTS alerts (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER REFERENCES fdrs(id) ON DELETE CASCADE,
+          institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+          alert_type VARCHAR(100) NOT NULL,
+          severity VARCHAR(50) DEFAULT 'Medium',
+          message TEXT NOT NULL,
+          due_date DATE,
+          is_resolved INTEGER DEFAULT 0,
+          resolved_by INTEGER,
+          resolved_at TIMESTAMP WITH TIME ZONE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
-export function initializeDatabase() {
-  db.pragma?.('journal_mode = WAL');
-  db.pragma?.('foreign_keys = ON');
+        CREATE TABLE IF NOT EXISTS release_requests (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER NOT NULL REFERENCES fdrs(id) ON DELETE CASCADE,
+          institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+          request_type VARCHAR(100) NOT NULL,
+          reason TEXT NOT NULL,
+          requested_by INTEGER NOT NULL,
+          requested_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          status VARCHAR(50) NOT NULL DEFAULT 'Submitted',
+          review_stage VARCHAR(50) NOT NULL DEFAULT 'Dealing_Officer',
+          dealing_officer_id INTEGER,
+          dealing_officer_remarks TEXT,
+          dealing_officer_at TIMESTAMP WITH TIME ZONE,
+          finance_officer_id INTEGER,
+          finance_officer_remarks TEXT,
+          finance_officer_at TIMESTAMP WITH TIME ZONE,
+          director_id INTEGER,
+          director_remarks TEXT,
+          director_at TIMESTAMP WITH TIME ZONE,
+          statutory_order_number VARCHAR(100),
+          noc_document_path TEXT,
+          approved_by INTEGER,
+          approved_at TIMESTAMP WITH TIME ZONE,
+          rejection_reason TEXT
+        );
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      full_name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      role TEXT NOT NULL DEFAULT 'viewer',
-      institution_id INTEGER,
-      is_active INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now')),
-      last_login TEXT
-    );
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id SERIAL PRIMARY KEY,
+          entity_type VARCHAR(100) NOT NULL,
+          entity_id INTEGER,
+          action VARCHAR(100) NOT NULL,
+          changed_by INTEGER,
+          changed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          old_value TEXT,
+          new_value TEXT,
+          ip_address VARCHAR(100),
+          notes TEXT,
+          user_id INTEGER,
+          institution_id INTEGER,
+          previous_state TEXT,
+          new_state TEXT,
+          timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
-    CREATE TABLE IF NOT EXISTS institutions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      aicte_id TEXT UNIQUE NOT NULL,
-      name TEXT NOT NULL,
-      address TEXT,
-      state TEXT,
-      city TEXT,
-      contact_person TEXT,
-      contact_email TEXT,
-      contact_phone TEXT,
-      institution_type TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+        CREATE TABLE IF NOT EXISTS lien_invocations (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER NOT NULL REFERENCES fdrs(id) ON DELETE CASCADE,
+          institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+          case_reference_number VARCHAR(100) UNIQUE NOT NULL,
+          invocation_amount NUMERIC(15, 2) NOT NULL,
+          section_invoked VARCHAR(100) DEFAULT 'Section 10(k) AICTE Act, 1987',
+          stage VARCHAR(50) NOT NULL DEFAULT 'INITIATED',
+          initiated_by INTEGER NOT NULL,
+          initiated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          show_cause_notice_ref VARCHAR(100),
+          show_cause_date DATE,
+          show_cause_due_date DATE,
+          institution_response_ref VARCHAR(100),
+          institution_response_summary TEXT,
+          bank_demand_letter_ref VARCHAR(100),
+          bank_demand_sent_at TIMESTAMP WITH TIME ZONE,
+          utr_number VARCHAR(100),
+          remitted_amount NUMERIC(15, 2),
+          remitted_at TIMESTAMP WITH TIME ZONE,
+          forfeiture_order_doc_path TEXT,
+          remarks TEXT
+        );
 
-    CREATE TABLE IF NOT EXISTS fdrs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      institution_id INTEGER NOT NULL,
-      fdr_number TEXT UNIQUE NOT NULL,
-      bank_name TEXT NOT NULL,
-      bank_branch TEXT,
-      account_number TEXT,
-      deposit_amount REAL NOT NULL,
-      currency TEXT DEFAULT 'INR',
-      issue_date TEXT NOT NULL,
-      maturity_date TEXT NOT NULL,
-      interest_rate REAL,
-      deposit_type TEXT DEFAULT 'FDR',
-      purpose TEXT,
-      status TEXT NOT NULL DEFAULT 'Active',
-      verification_status TEXT DEFAULT 'Unverified',
-      verification_notes TEXT,
-      verified_by INTEGER,
-      verified_at TEXT,
-      submitted_by INTEGER,
-      submitted_at TEXT DEFAULT (datetime('now')),
-      last_updated_by INTEGER,
-      last_updated_at TEXT DEFAULT (datetime('now')),
-      remarks TEXT,
-      is_renewal INTEGER DEFAULT 0,
-      parent_fdr_id INTEGER
-    );
+        CREATE TABLE IF NOT EXISTS bulk_ingestion_jobs (
+          id SERIAL PRIMARY KEY,
+          batch_reference VARCHAR(100) UNIQUE NOT NULL,
+          total_rows INTEGER NOT NULL,
+          successful_rows INTEGER DEFAULT 0,
+          failed_rows INTEGER DEFAULT 0,
+          validation_errors TEXT,
+          uploaded_by INTEGER NOT NULL,
+          status VARCHAR(50) DEFAULT 'PENDING',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
-    CREATE TABLE IF NOT EXISTS fdr_documents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fdr_id INTEGER NOT NULL,
-      document_type TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      file_path TEXT NOT NULL,
-      file_size INTEGER,
-      mime_type TEXT,
-      sha256_hash TEXT,
-      verified_on_chain INTEGER DEFAULT 1,
-      uploaded_by INTEGER,
-      uploaded_at TEXT DEFAULT (datetime('now')),
-      is_active INTEGER DEFAULT 1
-    );
+        CREATE TABLE IF NOT EXISTS statutory_certificates (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER NOT NULL REFERENCES fdrs(id) ON DELETE CASCADE,
+          institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+          certificate_type VARCHAR(100) NOT NULL,
+          certificate_number VARCHAR(100) UNIQUE NOT NULL,
+          qr_verification_code VARCHAR(100) UNIQUE NOT NULL,
+          dsc_officer_name VARCHAR(255) NOT NULL,
+          dsc_officer_designation VARCHAR(255) NOT NULL,
+          dsc_timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          pdf_payload TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
-    CREATE TABLE IF NOT EXISTS alerts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fdr_id INTEGER NOT NULL,
-      institution_id INTEGER NOT NULL,
-      alert_type TEXT NOT NULL,
-      severity TEXT DEFAULT 'Medium',
-      message TEXT NOT NULL,
-      due_date TEXT,
-      is_resolved INTEGER DEFAULT 0,
-      resolved_by INTEGER,
-      resolved_at TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+        CREATE TABLE IF NOT EXISTS dispute_tickets (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER NOT NULL REFERENCES fdrs(id) ON DELETE CASCADE,
+          institution_id INTEGER NOT NULL REFERENCES institutions(id) ON DELETE CASCADE,
+          title VARCHAR(255) NOT NULL,
+          discrepancy_details TEXT NOT NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'Open',
+          priority VARCHAR(50) DEFAULT 'Medium',
+          created_by INTEGER REFERENCES users(id),
+          resolution_notes TEXT,
+          resolved_by INTEGER REFERENCES users(id),
+          resolved_at TIMESTAMP WITH TIME ZONE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
-    CREATE TABLE IF NOT EXISTS statutory_certificates (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fdr_id INTEGER NOT NULL,
-      institution_id INTEGER NOT NULL,
-      certificate_type TEXT NOT NULL,
-      certificate_number TEXT UNIQUE NOT NULL,
-      qr_verification_code TEXT UNIQUE NOT NULL,
-      dsc_officer_name TEXT NOT NULL,
-      dsc_officer_designation TEXT NOT NULL,
-      dsc_timestamp TEXT DEFAULT (datetime('now')),
-      pdf_payload TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+        CREATE TABLE IF NOT EXISTS dispute_messages (
+          id SERIAL PRIMARY KEY,
+          dispute_id INTEGER NOT NULL REFERENCES dispute_tickets(id) ON DELETE CASCADE,
+          sender_id INTEGER REFERENCES users(id),
+          message TEXT NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
 
-    CREATE TABLE IF NOT EXISTS lien_invocations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fdr_id INTEGER NOT NULL,
-      institution_id INTEGER NOT NULL,
-      case_reference_number TEXT UNIQUE NOT NULL,
-      invocation_amount REAL NOT NULL,
-      section_invoked TEXT DEFAULT 'Section 10(k) AICTE Act, 1987',
-      stage TEXT NOT NULL DEFAULT 'INITIATED',
-      initiated_by INTEGER NOT NULL,
-      initiated_at TEXT DEFAULT (datetime('now')),
-      show_cause_notice_ref TEXT,
-      show_cause_date TEXT,
-      show_cause_due_date TEXT,
-      institution_response_ref TEXT,
-      institution_response_summary TEXT,
-      bank_demand_letter_ref TEXT,
-      bank_demand_sent_at TEXT,
-      utr_number TEXT,
-      remitted_amount REAL,
-      remitted_at TEXT,
-      forfeiture_order_doc_path TEXT,
-      remarks TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS bulk_ingestion_jobs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      batch_reference TEXT UNIQUE NOT NULL,
-      total_rows INTEGER NOT NULL,
-      successful_rows INTEGER DEFAULT 0,
-      failed_rows INTEGER DEFAULT 0,
-      validation_errors TEXT,
-      uploaded_by INTEGER NOT NULL,
-      status TEXT DEFAULT 'PENDING',
-      created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS release_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fdr_id INTEGER NOT NULL,
-      institution_id INTEGER NOT NULL,
-      request_type TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      requested_by INTEGER NOT NULL,
-      requested_at TEXT DEFAULT (datetime('now')),
-      status TEXT NOT NULL DEFAULT 'Submitted',
-      review_stage TEXT NOT NULL DEFAULT 'Dealing_Officer',
-      dealing_officer_id INTEGER,
-      dealing_officer_remarks TEXT,
-      dealing_officer_at TEXT,
-      finance_officer_id INTEGER,
-      finance_officer_remarks TEXT,
-      finance_officer_at TEXT,
-      director_id INTEGER,
-      director_remarks TEXT,
-      director_at TEXT,
-      statutory_order_number TEXT,
-      noc_document_path TEXT,
-      approved_by INTEGER,
-      approved_at TEXT,
-      rejection_reason TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS audit_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      fdr_id INTEGER,
-      institution_id INTEGER,
-      action TEXT NOT NULL,
-      entity_type TEXT NOT NULL,
-      entity_id INTEGER,
-      previous_state TEXT,
-      new_state TEXT,
-      ip_address TEXT,
-      user_agent TEXT,
-      timestamp TEXT DEFAULT (datetime('now'))
-    );
-  `);
-
-  try {
-    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
-    if (!userCount || userCount.count === 0) {
-      const insertUser = db.prepare(`
-        INSERT OR IGNORE INTO users (id, username, password_hash, full_name, email, role, institution_id, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        CREATE TABLE IF NOT EXISTS notifications_log (
+          id SERIAL PRIMARY KEY,
+          institution_id INTEGER REFERENCES institutions(id) ON DELETE CASCADE,
+          fdr_id INTEGER REFERENCES fdrs(id) ON DELETE CASCADE,
+          notification_type VARCHAR(100) NOT NULL,
+          channel VARCHAR(50) NOT NULL DEFAULT 'EMAIL',
+          recipient VARCHAR(255) NOT NULL,
+          subject VARCHAR(255),
+          message TEXT NOT NULL,
+          status VARCHAR(50) DEFAULT 'SENT',
+          sent_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
       `);
-      insertUser.run(1, 'admin', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'System Administrator', 'admin@aicte.gov.in', 'admin', null, 1);
-      insertUser.run(2, 'officer1', '$2a$10$uzbVo9BNwEYt.j0hSP/S/.XEnWxJvZxHJgv.jWBV/g22Rxk5xGxnG', 'Rajesh Verma (Bureau Officer)', 'r.verma@aicte.gov.in', 'bureau_officer', null, 1);
-      insertUser.run(3, 'inst_user1', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'IIT Bombay Finance Officer', 'finance@iitb.ac.in', 'institution_user', 1, 1);
-      insertUser.run(4, 'viewer1', '$2a$10$QLszhaR6SX6rA1wyDn5w9.1czXkAM/5ARkegWxQhy3YCDSTytMvl6', 'Auditor General / Viewer', 'viewer@aicte.gov.in', 'viewer', null, 1);
-    }
-  } catch (userSeedErr) {
-    console.warn('Initial user seed notice:', userSeedErr);
-  }
 
-  // Run cloud sync asynchronously
-  if (pgPool) {
-    syncFromSupabase().catch(err => {
-      console.warn('Cloud sync initialization warning:', err);
-    });
+      // Seed default users directly in PostgreSQL if none exist
+      const userRes = await pgPool.query('SELECT COUNT(*) as count FROM users');
+      if (Number(userRes.rows[0]?.count) === 0) {
+        await pgPool.query(`
+          INSERT INTO users (id, username, password_hash, full_name, email, role, institution_id, is_active)
+          VALUES
+            (1, 'admin', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'System Administrator', 'admin@aicte.gov.in', 'admin', null, 1),
+            (2, 'officer1', '$2a$10$uzbVo9BNwEYt.j0hSP/S/.XEnWxJvZxHJgv.jWBV/g22Rxk5xGxnG', 'Rajesh Verma (Bureau Officer)', 'r.verma@aicte.gov.in', 'bureau_officer', null, 1),
+            (3, 'inst_user1', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'IIT Bombay Finance Officer', 'finance@iitb.ac.in', 'institution_user', 1, 1),
+            (4, 'viewer1', '$2a$10$QLszhaR6SX6rA1wyDn5w9.1czXkAM/5ARkegWxQhy3YCDSTytMvl6', 'Auditor General / Viewer', 'viewer@aicte.gov.in', 'viewer', null, 1)
+          ON CONFLICT (id) DO NOTHING;
+        `);
+      }
+      console.log('✅ PostgreSQL authoritative schema verified. All reads and writes are directed exclusively to PostgreSQL.');
+    } catch (pgInitErr: any) {
+      console.warn('⚠️ PostgreSQL initialization notice:', pgInitErr.message);
+    }
+  } else {
+    console.log('ℹ️ Offline SQLite fallback initialized (PostgreSQL not detected in environment).');
   }
 }

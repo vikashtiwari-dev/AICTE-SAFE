@@ -21,8 +21,8 @@ router.get('/template', (_req, res) => {
 });
 
 // GET /api/bulk/history - List past batch ingestion jobs
-router.get('/history', authenticate, requireRole(['admin', 'bureau_officer']), (_req, res) => {
-  const jobs = db.prepare(`
+router.get('/history', authenticate, requireRole(['admin', 'bureau_officer']), async (_req, res) => {
+  const jobs = await db.prepare(`
     SELECT b.*, u.full_name as uploaded_by_name
     FROM bulk_ingestion_jobs b
     LEFT JOIN users u ON b.uploaded_by = u.id
@@ -117,7 +117,7 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
       continue;
     }
 
-    let institution = db.prepare('SELECT id FROM institutions WHERE aicte_id = ?').get(aicteId) as any;
+    let institution = await db.prepare('SELECT id FROM institutions WHERE aicte_id = ?').get(aicteId) as any;
     if (!institution) {
       if (instName) {
         try {
@@ -136,7 +136,7 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
       }
     }
 
-    const dup = db.prepare('SELECT id FROM fdrs WHERE fdr_number = ?').get(fdrNumber);
+    const dup = await db.prepare('SELECT id FROM fdrs WHERE fdr_number = ?').get(fdrNumber);
     if (dup) {
       errors.push({ row: rowNum, fdr_number: fdrNumber, error: `FDR Number "${fdrNumber}" already exists in the portal records.` });
       continue;

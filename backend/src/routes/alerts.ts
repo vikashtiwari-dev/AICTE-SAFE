@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, executeMutation } from '../db/database';
+import { db } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { generateAlerts } from '../services/alertService';
 
@@ -19,7 +19,7 @@ const handleCronCheck = async (req: express.Request, res: express.Response) => {
   }
 
   try {
-    const alertsCreated = generateAlerts();
+    const alertsCreated = await generateAlerts();
     return res.json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -37,7 +37,7 @@ router.get('/cron-check', handleCronCheck);
 router.post('/cron-check', handleCronCheck);
 
 // GET /api/alerts - List with strict institution isolation
-router.get('/', authenticate, (req: AuthRequest, res) => {
+router.get('/', authenticate, async (req: AuthRequest, res) => {
   const { is_resolved, alert_type, severity } = req.query;
 
   let whereClause = 'WHERE 1=1';
@@ -65,7 +65,7 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
     params.push(severity);
   }
 
-  const alerts = db.prepare(`
+  const alerts = await db.prepare(`
     SELECT a.*, 
       i.name as institution_name, i.aicte_id,
       f.fdr_number, f.bank_name, f.deposit_amount, f.maturity_date,
@@ -90,19 +90,21 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
 
 // PATCH /api/alerts/:id/resolve - Resolve alert with audit trail and cloud persistence
 router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
-  const alert = db.prepare('SELECT * FROM alerts WHERE id = ?').get(req.params.id) as any;
+  const alert = await db.prepare('SELECT * FROM alerts WHERE id = ?').get(req.params.id) as any;
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
 
   try {
-    await executeMutation(`
-      UPDATE alerts SET is_resolved = 1, resolved_by = ?, resolved_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [req.user!.userId, req.params.id]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        UPDATE alerts SET is_resolved = 1, resolved_by = ?, resolved_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [req.user!.userId, req.params.id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('Alert', ?, 'Resolved', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, JSON.stringify({ is_resolved: 1, resolved_by: req.user!.userId }), `Alert #${req.params.id} resolved`]);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('Alert', ?, 'Resolved', ?, ?, ?)
+      `, [req.params.id, req.user!.userId, JSON.stringify({ is_resolved: 1, resolved_by: req.user!.userId }), `Alert #${req.params.id} resolved`]);
+    });
 
     return res.json({ success: true, message: 'Alert marked resolved in national compliance registry.' });
   } catch (err: any) {
@@ -111,8 +113,8 @@ router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer
 });
 
 // POST /api/alerts/generate - Manual trigger
-router.post('/generate', authenticate, requireRole(['admin', 'bureau_officer']), (_req: AuthRequest, res) => {
-  const count = generateAlerts();
+router.post('/generate', authenticate, requireRole(['admin', 'bureau_officer']), async (_req: AuthRequest, res) => {
+  const count = await generateAlerts();
   return res.json({ success: true, newAlerts: count });
 });
 

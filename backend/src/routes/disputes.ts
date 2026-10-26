@@ -5,7 +5,7 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 const router = express.Router();
 
 // GET /api/disputes - list all dispute tickets with strict institution isolation
-router.get('/', authenticate, (req: AuthRequest, res) => {
+router.get('/', authenticate, async (req: AuthRequest, res) => {
   const { status, institution_id } = req.query;
   let sql = `
     SELECT d.*, 
@@ -39,13 +39,13 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
 
   sql += ' ORDER BY d.created_at DESC';
 
-  const tickets = db.prepare(sql).all(...params);
+  const tickets = await db.prepare(sql).all(...params);
   return res.json(tickets);
 });
 
 // GET /api/disputes/:id - get ticket with messages thread
-router.get('/:id', authenticate, (req: AuthRequest, res) => {
-  const ticket = db.prepare(`
+router.get('/:id', authenticate, async (req: AuthRequest, res) => {
+  const ticket = await db.prepare(`
     SELECT d.*, 
       f.fdr_number, f.bank_name, f.deposit_amount, f.verification_status, f.verification_notes,
       i.name as institution_name, i.aicte_id, i.contact_email, i.contact_person
@@ -64,11 +64,11 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
     return res.status(403).json({ error: 'Access denied: You do not possess clearance for this dispute ticket.' });
   }
 
-  const messages = db.prepare(`
+  const messages = await db.prepare(`
     SELECT * FROM dispute_messages
-    WHERE ticket_id = ?
+    WHERE ticket_id = ? OR dispute_id = ?
     ORDER BY created_at ASC
-  `).all(req.params.id);
+  `).all(req.params.id, req.params.id);
 
   return res.json({ ticket, messages });
 });
@@ -81,33 +81,37 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer']), async (
     return res.status(400).json({ error: 'FDR ID, title, and discrepancy details are required' });
   }
 
-  const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(fdr_id) as any;
+  const fdr = await db.prepare('SELECT * FROM fdrs WHERE id = ?').get(fdr_id) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
   try {
-    const result = await executeMutation(`
-      INSERT INTO dispute_tickets (fdr_id, institution_id, title, discrepancy_details, status, priority, created_by)
-      VALUES (?, ?, ?, ?, 'Open', ?, ?)
-    `, [fdr.id, fdr.institution_id, title, discrepancy_details, priority, req.user!.userId]);
+    const ticketId = await db.transaction(async (tx) => {
+      const result = await tx.execute(`
+        INSERT INTO dispute_tickets (fdr_id, institution_id, title, discrepancy_details, status, priority, created_by)
+        VALUES (?, ?, ?, ?, 'Open', ?, ?)
+      `, [fdr.id, fdr.institution_id, title, discrepancy_details, priority, req.user!.userId]);
 
-    const ticketId = result.lastInsertRowid;
+      const tId = result.lastInsertRowid;
 
-    // Insert initial message
-    await executeMutation(`
-      INSERT INTO dispute_messages (ticket_id, sender_id, sender_role, sender_name, message)
-      VALUES (?, ?, ?, ?, ?)
-    `, [ticketId, req.user!.userId, req.user!.role, 'Council Regulation Officer', discrepancy_details]);
+      // Insert initial message
+      await tx.execute(`
+        INSERT INTO dispute_messages (ticket_id, dispute_id, sender_id, sender_role, sender_name, message)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [tId, tId, req.user!.userId, req.user!.role, 'Council Regulation Officer', discrepancy_details]);
 
-    // Update FDR status to Discrepancy
-    await executeMutation(`
-      UPDATE fdrs SET verification_status = 'Discrepancy', verification_notes = ? WHERE id = ?
-    `, [title, fdr.id]);
+      // Update FDR status to Discrepancy
+      await tx.execute(`
+        UPDATE fdrs SET verification_status = 'Discrepancy', verification_notes = ? WHERE id = ?
+      `, [title, fdr.id]);
 
-    // Add alert
-    await executeMutation(`
-      INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
-      VALUES (?, ?, 'Discrepancy', 'Critical', ?)
-    `, [fdr.id, fdr.institution_id, `Dispute Opened: ${title}`]);
+      // Add alert
+      await tx.execute(`
+        INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
+        VALUES (?, ?, 'Discrepancy', 'Critical', ?)
+      `, [fdr.id, fdr.institution_id, `Dispute Opened: ${title}`]);
+
+      return tId;
+    });
 
     return res.status(201).json({ id: ticketId, message: 'Dispute ticket opened and recorded in cloud registry.' });
   } catch (err: any) {
@@ -122,7 +126,7 @@ router.post('/:id/messages', authenticate, async (req: AuthRequest, res) => {
     return res.status(400).json({ error: 'Message content is required' });
   }
 
-  const ticket = db.prepare('SELECT * FROM dispute_tickets WHERE id = ?').get(req.params.id) as any;
+  const ticket = await db.prepare('SELECT * FROM dispute_tickets WHERE id = ?').get(req.params.id) as any;
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
   // Ownership verification for institution user
@@ -133,15 +137,17 @@ router.post('/:id/messages', authenticate, async (req: AuthRequest, res) => {
   const senderName = req.user!.role === 'institution_user' ? 'Institution Accounts Officer' : 'Council Regulation Officer';
 
   try {
-    await executeMutation(`
-      INSERT INTO dispute_messages (ticket_id, sender_id, sender_role, sender_name, message, attachment_url)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `, [ticket.id, req.user!.userId, req.user!.role, senderName, message, attachment_url || null]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        INSERT INTO dispute_messages (ticket_id, dispute_id, sender_id, sender_role, sender_name, message, attachment_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [ticket.id, ticket.id, req.user!.userId, req.user!.role, senderName, message, attachment_url || null]);
 
-    // If institution responded, mark ticket as 'Clarification Submitted'
-    if (req.user!.role === 'institution_user' && ticket.status === 'Open') {
-      await executeMutation('UPDATE dispute_tickets SET status = "Clarification Submitted" WHERE id = ?', [ticket.id]);
-    }
+      // If institution responded, mark ticket as 'Clarification Submitted'
+      if (req.user!.role === 'institution_user' && ticket.status === 'Open') {
+        await tx.execute('UPDATE dispute_tickets SET status = \'Clarification Submitted\' WHERE id = ?', [ticket.id]);
+      }
+    });
 
     return res.status(201).json({ success: true });
   } catch (err: any) {
@@ -151,27 +157,29 @@ router.post('/:id/messages', authenticate, async (req: AuthRequest, res) => {
 
 // PATCH /api/disputes/:id/resolve - Resolve dispute
 router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
-  const ticket = db.prepare('SELECT * FROM dispute_tickets WHERE id = ?').get(req.params.id) as any;
+  const ticket = await db.prepare('SELECT * FROM dispute_tickets WHERE id = ?').get(req.params.id) as any;
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
   try {
-    await executeMutation(`
-      UPDATE dispute_tickets 
-      SET status = 'Resolved', resolved_at = CURRENT_TIMESTAMP, resolved_by = ?
-      WHERE id = ?
-    `, [req.user!.userId, ticket.id]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        UPDATE dispute_tickets 
+        SET status = 'Resolved', resolved_at = CURRENT_TIMESTAMP, resolved_by = ?
+        WHERE id = ?
+      `, [req.user!.userId, ticket.id]);
 
-    // Update FDR verification status back to Verified
-    await executeMutation(`
-      UPDATE fdrs SET verification_status = 'Verified', verification_notes = 'Dispute resolved and verified by Council Regulation Bureau'
-      WHERE id = ?
-    `, [ticket.fdr_id]);
+      // Update FDR verification status back to Verified
+      await tx.execute(`
+        UPDATE fdrs SET verification_status = 'Verified', verification_notes = 'Dispute resolved and verified by Council Regulation Bureau'
+        WHERE id = ?
+      `, [ticket.fdr_id]);
 
-    // Resolve active discrepancy alert for this FDR
-    await executeMutation(`
-      UPDATE alerts SET is_resolved = 1, resolved_at = CURRENT_TIMESTAMP, resolved_by = ?
-      WHERE fdr_id = ? AND alert_type = 'Discrepancy'
-    `, [req.user!.userId, ticket.fdr_id]);
+      // Resolve active discrepancy alert for this FDR
+      await tx.execute(`
+        UPDATE alerts SET is_resolved = 1, resolved_at = CURRENT_TIMESTAMP, resolved_by = ?
+        WHERE fdr_id = ? AND alert_type = 'Discrepancy'
+      `, [req.user!.userId, ticket.fdr_id]);
+    });
 
     return res.json({ success: true, message: 'Dispute marked as Resolved and FDR verification restored.' });
   } catch (err: any) {

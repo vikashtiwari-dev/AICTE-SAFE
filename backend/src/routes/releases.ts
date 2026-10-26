@@ -6,7 +6,7 @@ import { validateLockInEligibility } from '../services/aphService';
 const router = express.Router();
 
 // GET /api/releases - List with institution isolation
-router.get('/', authenticate, (req: AuthRequest, res) => {
+router.get('/', authenticate, async (req: AuthRequest, res) => {
   const { status, request_type } = req.query;
 
   let whereClause = 'WHERE 1=1';
@@ -30,7 +30,7 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
     params.push(request_type);
   }
 
-  const requests = db.prepare(`
+  const requests = await db.prepare(`
     SELECT r.*,
       i.name as institution_name, i.aicte_id,
       f.fdr_number, f.bank_name, f.deposit_amount, f.maturity_date, f.status as fdr_status, f.verification_status,
@@ -60,7 +60,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
     return res.status(400).json({ error: 'FDR ID and substantive release reason are required' });
   }
 
-  const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(fdr_id) as any;
+  const fdr = await db.prepare('SELECT * FROM fdrs WHERE id = ?').get(fdr_id) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
   // Ownership verification
@@ -77,7 +77,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
   }
 
   // Prevent duplicate active release requests
-  const existingPending = db.prepare(`
+  const existingPending = await db.prepare(`
     SELECT id FROM release_requests 
     WHERE fdr_id = ? AND status IN ('Submitted', 'Under Review', 'Pending')
   `).get(fdr_id);
@@ -86,20 +86,24 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
   }
 
   try {
-    const result = await executeMutation(`
-      INSERT INTO release_requests (fdr_id, institution_id, request_type, reason, requested_by, status, review_stage, dealing_officer_remarks)
-      VALUES (?, ?, ?, ?, ?, 'Submitted', 'Dealing_Officer', ?)
-    `, [fdr_id, fdr.institution_id, request_type, reason, req.user!.userId, remarks || null]);
+    const createdRequest = await db.transaction(async (tx) => {
+      const result = await tx.execute(`
+        INSERT INTO release_requests (fdr_id, institution_id, request_type, reason, requested_by, status, review_stage, dealing_officer_remarks)
+        VALUES (?, ?, ?, ?, ?, 'Submitted', 'Dealing_Officer', ?)
+      `, [fdr_id, fdr.institution_id, request_type, reason, req.user!.userId, remarks || null]);
 
-    // Update FDR status to 'Under Review for Release'
-    await executeMutation("UPDATE fdrs SET status = 'Under Review for Release', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, fdr_id]);
+      // Update FDR status to 'Under Review for Release'
+      await tx.execute("UPDATE fdrs SET status = 'Under Review for Release', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, fdr_id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('Release', ?, 'Request Submitted', ?, ?, ?)
-    `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ fdr_number: fdr.fdr_number, request_type, reason }), `Release request submitted by ${req.user!.username}`]);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('Release', ?, 'Request Submitted', ?, ?, ?)
+      `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ fdr_number: fdr.fdr_number, request_type, reason }), `Release request submitted by ${req.user!.username}`]);
 
-    return res.status(201).json(db.prepare('SELECT * FROM release_requests WHERE id = ?').get(result.lastInsertRowid));
+      return await tx.queryOne('SELECT * FROM release_requests WHERE id = ?', [result.lastInsertRowid]);
+    });
+
+    return res.status(201).json(createdRequest);
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to create release request', details: err.message });
   }
@@ -108,7 +112,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
 // PATCH /api/releases/:id/tier-review - Strictly Enforced Maker-Checker Multi-Tier Workflow
 router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const { stage, remarks, decision = 'FORWARD' } = req.body;
-  const request = db.prepare('SELECT r.*, f.fdr_number, f.deposit_amount FROM release_requests r JOIN fdrs f ON r.fdr_id = f.id WHERE r.id = ?').get(req.params.id) as any;
+  const request = await db.prepare('SELECT r.*, f.fdr_number, f.deposit_amount FROM release_requests r JOIN fdrs f ON r.fdr_id = f.id WHERE r.id = ?').get(req.params.id) as any;
   if (!request) return res.status(404).json({ error: 'Release request not found' });
 
   // Maker-Checker Rule: Recommender / Requester cannot review their own request
@@ -121,19 +125,21 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
     if (!remarks || remarks.trim().length < 5) {
       return res.status(400).json({ error: 'Substantive justification is required when rejecting a release request.' });
     }
-    await executeMutation(`
-      UPDATE release_requests 
-      SET status = 'Rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [remarks, req.user!.userId, req.params.id]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        UPDATE release_requests 
+        SET status = 'Rejected', rejection_reason = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [remarks, req.user!.userId, req.params.id]);
 
-    // Revert FDR status to Active
-    await executeMutation("UPDATE fdrs SET status = 'Active', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, request.fdr_id]);
+      // Revert FDR status to Active
+      await tx.execute("UPDATE fdrs SET status = 'Active', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, request.fdr_id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('Release', ?, 'Release Rejected', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks, stage: request.review_stage }), remarks]);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('Release', ?, 'Release Rejected', ?, ?, ?)
+      `, [req.params.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks, stage: request.review_stage }), remarks]);
+    });
 
     return res.json({ success: true, message: 'Release request rejected. Instrument returned to Active status.' });
   }
@@ -145,17 +151,19 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
       return res.status(400).json({ error: `State transition error: Cannot move to Finance_Officer from current stage "${request.review_stage}".` });
     }
 
-    await executeMutation(`
-      UPDATE release_requests 
-      SET review_stage = 'Finance_Officer', status = 'Under Review',
-          dealing_officer_id = ?, dealing_officer_remarks = ?, dealing_officer_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [req.user!.userId, remarks || 'Dealing Assistant primary verification complete: Bank confirmation & lock-in requirements checked.', req.params.id]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        UPDATE release_requests 
+        SET review_stage = 'Finance_Officer', status = 'Under Review',
+            dealing_officer_id = ?, dealing_officer_remarks = ?, dealing_officer_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [req.user!.userId, remarks || 'Dealing Assistant primary verification complete: Bank confirmation & lock-in requirements checked.', req.params.id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('Release', ?, 'Dealing Scrutiny Cleared', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, JSON.stringify({ next_stage: 'Finance_Officer', remarks }), remarks || 'Forwarded to Finance Officer']);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('Release', ?, 'Dealing Scrutiny Cleared', ?, ?, ?)
+      `, [req.params.id, req.user!.userId, JSON.stringify({ next_stage: 'Finance_Officer', remarks }), remarks || 'Forwarded to Finance Officer']);
+    });
 
     return res.json({ success: true, message: 'Dealing scrutiny completed. Case forwarded to Finance Officer.' });
   } else if (stage === 'Director_Approval') {
@@ -163,17 +171,19 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
       return res.status(400).json({ error: `State transition error: Finance Officer clearance required before forwarding to Competent Authority. Current stage: "${request.review_stage}".` });
     }
 
-    await executeMutation(`
-      UPDATE release_requests 
-      SET review_stage = 'Director_Approval', status = 'Under Review',
-          finance_officer_id = ?, finance_officer_remarks = ?, finance_officer_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [req.user!.userId, remarks || 'Finance Officer concurrence recorded: Interest reconciliation & no-dues confirmed.', req.params.id]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        UPDATE release_requests 
+        SET review_stage = 'Director_Approval', status = 'Under Review',
+            finance_officer_id = ?, finance_officer_remarks = ?, finance_officer_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [req.user!.userId, remarks || 'Finance Officer concurrence recorded: Interest reconciliation & no-dues confirmed.', req.params.id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('Release', ?, 'Finance Review Cleared', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, JSON.stringify({ next_stage: 'Director_Approval', remarks }), remarks || 'Forwarded to Director']);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('Release', ?, 'Finance Review Cleared', ?, ?, ?)
+      `, [req.params.id, req.user!.userId, JSON.stringify({ next_stage: 'Director_Approval', remarks }), remarks || 'Forwarded to Director']);
+    });
 
     return res.json({ success: true, message: 'Finance concurrence recorded. Forwarded to Director for statutory order approval.' });
   } else {
@@ -184,7 +194,7 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
 // POST /api/releases/:id/dsc-sign - Statutory Order Attestation Seal (Director / Competent Authority)
 router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const { signer_name = 'Director, AICTE Regulation Bureau', officer_designation = 'Competent Authority' } = req.body;
-  const request = db.prepare('SELECT r.*, f.fdr_number, f.deposit_amount FROM release_requests r JOIN fdrs f ON r.fdr_id = f.id WHERE r.id = ?').get(req.params.id) as any;
+  const request = await db.prepare('SELECT r.*, f.fdr_number, f.deposit_amount FROM release_requests r JOIN fdrs f ON r.fdr_id = f.id WHERE r.id = ?').get(req.params.id) as any;
   if (!request) return res.status(404).json({ error: 'Release request not found' });
 
   // Enforce workflow completion: Cannot approve unless earlier scrutiny tiers are completed!
@@ -202,26 +212,28 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
 
   try {
     // Transition request to Approved with Statutory Order Attestation
-    await executeMutation(`
-      UPDATE release_requests 
-      SET status = 'Approved', review_stage = 'Approved',
-          approved_by = ?, approved_at = CURRENT_TIMESTAMP,
-          director_id = ?, director_remarks = ?, director_at = CURRENT_TIMESTAMP,
-          statutory_order_number = ?,
-          remarks = 'Statutory Release Order approved under Section 10(k) AICTE Act'
-      WHERE id = ?
-    `, [req.user!.userId, req.user!.userId, `Formally sanctioned by ${signer_name} (${officer_designation})`, orderNumber, req.params.id]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        UPDATE release_requests 
+        SET status = 'Approved', review_stage = 'Approved',
+            approved_by = ?, approved_at = CURRENT_TIMESTAMP,
+            director_id = ?, director_remarks = ?, director_at = CURRENT_TIMESTAMP,
+            statutory_order_number = ?,
+            remarks = 'Statutory Release Order approved under Section 10(k) AICTE Act'
+        WHERE id = ?
+      `, [req.user!.userId, req.user!.userId, `Formally sanctioned by ${signer_name} (${officer_designation})`, orderNumber, req.params.id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('Release', ?, 'Statutory Release Approved', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, JSON.stringify({
-      order_number: orderNumber,
-      seal_hash: dscHash,
-      signer: signer_name,
-      designation: officer_designation,
-      statutory_basis: 'Section 10(k) AICTE Act, 1987'
-    }), `Sanctioned by ${signer_name}`]);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('Release', ?, 'Statutory Release Approved', ?, ?, ?)
+      `, [req.params.id, req.user!.userId, JSON.stringify({
+        order_number: orderNumber,
+        seal_hash: dscHash,
+        signer: signer_name,
+        designation: officer_designation,
+        statutory_basis: 'Section 10(k) AICTE Act, 1987'
+      }), `Sanctioned by ${signer_name}`]);
+    });
 
     return res.json({
       success: true,
@@ -240,7 +252,7 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
 
 // PATCH /api/releases/:id/complete - Discharge & Release Instrument (Requires Prior Approval)
 router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
-  const request = db.prepare('SELECT * FROM release_requests WHERE id = ?').get(req.params.id) as any;
+  const request = await db.prepare('SELECT * FROM release_requests WHERE id = ?').get(req.params.id) as any;
   if (!request) return res.status(404).json({ error: 'Release request not found' });
 
   // STRICT FINANCIAL CONTROL: Cannot complete discharge unless officially Approved!
@@ -253,31 +265,33 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
   const { noc_document_path, discharge_remarks } = req.body;
 
   try {
-    // 1. Mark request completed
-    await executeMutation(`
-      UPDATE release_requests 
-      SET status = 'Completed', review_stage = 'Completed',
-          noc_document_path = COALESCE(?, noc_document_path),
-          remarks = COALESCE(?, remarks)
-      WHERE id = ?
-    `, [noc_document_path || null, discharge_remarks || 'Bank lien formally discharged pursuant to AICTE Approval Order', req.params.id]);
+    await db.transaction(async (tx) => {
+      // 1. Mark request completed
+      await tx.execute(`
+        UPDATE release_requests 
+        SET status = 'Completed', review_stage = 'Completed',
+            noc_document_path = COALESCE(?, noc_document_path),
+            remarks = COALESCE(?, remarks)
+        WHERE id = ?
+      `, [noc_document_path || null, discharge_remarks || 'Bank lien formally discharged pursuant to AICTE Approval Order', req.params.id]);
 
-    // 2. Mark FDR as Released
-    await executeMutation(`
-      UPDATE fdrs 
-      SET status = 'Released', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [req.user!.userId, request.fdr_id]);
+      // 2. Mark FDR as Released
+      await tx.execute(`
+        UPDATE fdrs 
+        SET status = 'Released', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [req.user!.userId, request.fdr_id]);
 
-    // 3. Record audit trail
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('FDR', ?, 'Discharged and Released', ?, ?, ?)
-    `, [request.fdr_id, req.user!.userId, JSON.stringify({
-      release_request_id: request.id,
-      order_number: request.statutory_order_number,
-      discharged_by: req.user!.userId
-    }), 'FDR marked Released in national registry']);
+      // 3. Record audit trail
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('FDR', ?, 'Discharged and Released', ?, ?, ?)
+      `, [request.fdr_id, req.user!.userId, JSON.stringify({
+        release_request_id: request.id,
+        order_number: request.statutory_order_number,
+        discharged_by: req.user!.userId
+      }), 'FDR marked Released in national registry']);
+    });
 
     return res.json({
       success: true,

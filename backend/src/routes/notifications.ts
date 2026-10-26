@@ -5,7 +5,7 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 const router = express.Router();
 
 // GET /api/notifications - fetch notification history & nudges
-router.get('/', authenticate, (req: AuthRequest, res) => {
+router.get('/', authenticate, async (req: AuthRequest, res) => {
   const { channel, institution_id, limit = '50' } = req.query;
 
   let sql = `
@@ -33,16 +33,16 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
   sql += ' ORDER BY n.sent_at DESC LIMIT ?';
   params.push(parseInt(limit as string));
 
-  const logs = db.prepare(sql).all(...params);
+  const logs = await db.prepare(sql).all(...params);
   return res.json(logs);
 });
 
 // POST /api/notifications/trigger-nudges - automated trigger for 60d, 30d, 15d, 7d nudges
-router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_officer']), (req: AuthRequest, res) => {
+router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const today = new Date();
   
   // Find expiring FDRs within 60 days
-  const expiringFdrs = db.prepare(`
+  const expiringFdrs = await db.prepare(`
     SELECT f.*, i.name as inst_name, i.contact_person, i.contact_email, i.contact_phone
     FROM fdrs f
     JOIN institutions i ON f.institution_id = i.id
@@ -60,14 +60,14 @@ router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_offic
       const stage = diffDays <= 7 ? 7 : diffDays <= 15 ? 15 : diffDays <= 30 ? 30 : 60;
       
       // Check if already sent for this FDR & stage today
-      const alreadySent = db.prepare(`
+      const alreadySent = await db.prepare(`
         SELECT id FROM notifications_log 
-        WHERE fdr_id = ? AND days_before_maturity = ? AND date(sent_at) = date('now')
+        WHERE fdr_id = ? AND days_before_maturity = ? AND date(sent_at) = CURRENT_DATE
       `).get(fdr.id, stage);
 
       if (!alreadySent) {
         // Send WhatsApp Nudge to Principal
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
           VALUES (?, ?, 'WhatsApp', 'Principal', ?, ?, ?, 'Delivered')
         `).run(
@@ -77,7 +77,7 @@ router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_offic
         );
 
         // Send Email to Accounts Officer
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
           VALUES (?, ?, 'Email', 'Accounts_Officer', ?, ?, ?, 'Delivered')
         `).run(
@@ -87,7 +87,7 @@ router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_offic
         );
 
         // Send SMS to Chairman
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
           VALUES (?, ?, 'SMS', 'Chairman', ?, ?, ?, 'Delivered')
         `).run(

@@ -5,7 +5,7 @@ import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 const router = express.Router();
 
 // GET /api/institutions - list with summary statistics and institution isolation
-router.get('/', authenticate, (req: AuthRequest, res) => {
+router.get('/', authenticate, async (req: AuthRequest, res) => {
   let whereClause = '';
   const params: any[] = [];
 
@@ -18,7 +18,7 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
     params.push(req.user!.institution_id);
   }
 
-  const institutions = db.prepare(`
+  const institutions = await db.prepare(`
     SELECT i.*,
       COUNT(f.id) as total_fdrs,
       COALESCE(SUM(CASE WHEN f.status NOT IN ('Released', 'Cancelled') THEN f.deposit_amount ELSE 0 END), 0) as total_deposit_amount,
@@ -36,7 +36,7 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
 });
 
 // GET /api/institutions/:id - Single institution with ownership enforcement
-router.get('/:id', authenticate, (req: AuthRequest, res) => {
+router.get('/:id', authenticate, async (req: AuthRequest, res) => {
   // Strict ownership check for institution user
   if (req.user!.role === 'institution_user') {
     if (!req.user!.institution_id || Number(req.user!.institution_id) !== Number(req.params.id)) {
@@ -44,7 +44,7 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
     }
   }
 
-  const institution = db.prepare(`
+  const institution = await db.prepare(`
     SELECT i.*,
       COUNT(f.id) as total_fdrs,
       COALESCE(SUM(CASE WHEN f.status NOT IN ('Released', 'Cancelled') THEN f.deposit_amount ELSE 0 END), 0) as total_deposit_amount,
@@ -62,9 +62,9 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
   }
 
   // Get associated FDRs
-  const fdrs = db.prepare(`
+  const fdrs = await db.prepare(`
     SELECT f.*,
-      CAST(julianday(f.maturity_date) - julianday('now') AS INTEGER) as days_to_maturity
+      CAST((f.maturity_date - CURRENT_DATE) AS INTEGER) as days_to_maturity
     FROM fdrs f
     WHERE f.institution_id = ?
     ORDER BY f.maturity_date ASC
@@ -81,12 +81,12 @@ router.post('/requests', async (req, res) => {
     return res.status(400).json({ error: 'AICTE ID, institution name, and contact email are required' });
   }
 
-  const existing = db.prepare('SELECT id FROM institutions WHERE aicte_id = ?').get(aicte_id);
+  const existing = await db.prepare('SELECT id FROM institutions WHERE aicte_id = ?').get(aicte_id);
   if (existing) {
     return res.status(409).json({ error: `Institution with AICTE ID "${aicte_id}" is already active and registered in the portal.` });
   }
 
-  const pending = db.prepare('SELECT id FROM institution_requests WHERE aicte_id = ? AND status = "Pending"').get(aicte_id);
+  const pending = await db.prepare('SELECT id FROM institution_requests WHERE aicte_id = ? AND status = "Pending"').get(aicte_id);
   if (pending) {
     return res.status(409).json({ error: `An onboarding application for AICTE ID "${aicte_id}" is already pending Council review.` });
   }
@@ -97,9 +97,10 @@ router.post('/requests', async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')
     `, [aicte_id, name, address || null, state || null, city || null, contact_person || null, contact_email, contact_phone || null, institution_type || 'Engineering', justification || null]);
 
+    const createdReq = await db.prepare('SELECT * FROM institution_requests WHERE id = ?').get(result.lastInsertRowid);
     return res.status(201).json({
       message: 'Onboarding request submitted successfully. It is now awaiting Council Administrator approval.',
-      request: db.prepare('SELECT * FROM institution_requests WHERE id = ?').get(result.lastInsertRowid)
+      request: createdReq
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to submit onboarding request', details: err.message });
@@ -107,7 +108,7 @@ router.post('/requests', async (req, res) => {
 });
 
 // GET /api/institutions/requests - List onboarding requests (Admin & Bureau Officer)
-router.get('/requests', authenticate, requireRole(['admin', 'bureau_officer']), (req: AuthRequest, res) => {
+router.get('/requests', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const { status } = req.query;
   let sql = `
     SELECT r.*, u.full_name as reviewer_name 
@@ -121,13 +122,13 @@ router.get('/requests', authenticate, requireRole(['admin', 'bureau_officer']), 
   }
   sql += ' ORDER BY r.requested_at DESC';
 
-  const requests = db.prepare(sql).all(...params);
+  const requests = await db.prepare(sql).all(...params);
   return res.json(requests);
 });
 
 // PATCH /api/institutions/requests/:id/approve - Approve onboarding request
 router.patch('/requests/:id/approve', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
-  const request = db.prepare('SELECT * FROM institution_requests WHERE id = ?').get(req.params.id) as any;
+  const request = await db.prepare('SELECT * FROM institution_requests WHERE id = ?').get(req.params.id) as any;
   if (!request) {
     return res.status(404).json({ error: 'Onboarding request not found' });
   }
@@ -136,26 +137,29 @@ router.patch('/requests/:id/approve', authenticate, requireRole(['admin', 'burea
   }
 
   try {
-    const instResult = await executeMutation(`
-      INSERT INTO institutions (aicte_id, name, address, state, city, contact_person, contact_email, contact_phone, institution_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      request.aicte_id, request.name, request.address, request.state, request.city,
-      request.contact_person, request.contact_email, request.contact_phone, request.institution_type
-    ]);
+    const newInstitution = await db.transaction(async (tx) => {
+      const instResult = await tx.execute(`
+        INSERT INTO institutions (aicte_id, name, address, state, city, contact_person, contact_email, contact_phone, institution_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        request.aicte_id, request.name, request.address, request.state, request.city,
+        request.contact_person, request.contact_email, request.contact_phone, request.institution_type
+      ]);
 
-    await executeMutation(`
-      UPDATE institution_requests 
-      SET status = 'Approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [req.user!.userId, request.id]);
+      await tx.execute(`
+        UPDATE institution_requests 
+        SET status = 'Approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [req.user!.userId, request.id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('Institution', ?, 'Onboarding Approved', ?, ?, ?)
-    `, [instResult.lastInsertRowid, req.user!.userId, JSON.stringify({ aicte_id: request.aicte_id, name: request.name }), `Approved ${request.name}`]);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('Institution', ?, 'Onboarding Approved', ?, ?, ?)
+      `, [instResult.lastInsertRowid, req.user!.userId, JSON.stringify({ aicte_id: request.aicte_id, name: request.name }), `Approved ${request.name}`]);
 
-    const newInstitution = db.prepare('SELECT * FROM institutions WHERE id = ?').get(instResult.lastInsertRowid);
+      return await tx.queryOne('SELECT * FROM institutions WHERE id = ?', [instResult.lastInsertRowid]);
+    });
+
     return res.json({
       message: 'Institution onboarding request approved successfully.',
       institution: newInstitution
@@ -172,7 +176,7 @@ router.patch('/requests/:id/reject', authenticate, requireRole(['admin', 'bureau
     return res.status(400).json({ error: 'Rejection reason/remarks are mandatory.' });
   }
 
-  const request = db.prepare('SELECT * FROM institution_requests WHERE id = ?').get(req.params.id) as any;
+  const request = await db.prepare('SELECT * FROM institution_requests WHERE id = ?').get(req.params.id) as any;
   if (!request) {
     return res.status(404).json({ error: 'Onboarding request not found' });
   }
@@ -181,16 +185,18 @@ router.patch('/requests/:id/reject', authenticate, requireRole(['admin', 'bureau
   }
 
   try {
-    await executeMutation(`
-      UPDATE institution_requests 
-      SET status = 'Rejected', remarks = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [remarks, req.user!.userId, request.id]);
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        UPDATE institution_requests 
+        SET status = 'Rejected', remarks = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [remarks, req.user!.userId, request.id]);
 
-    await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('InstitutionRequest', ?, 'Onboarding Rejected', ?, ?, ?)
-    `, [request.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks }), remarks]);
+      await tx.execute(`
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+        VALUES ('InstitutionRequest', ?, 'Onboarding Rejected', ?, ?, ?)
+      `, [request.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks }), remarks]);
+    });
 
     return res.json({ message: 'Institution onboarding request rejected.', remarks });
   } catch (err: any) {
@@ -212,9 +218,10 @@ router.post('/', authenticate, requireRole(['admin']), async (req: AuthRequest, 
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [aicte_id, name, address || null, state || null, city || null, contact_person || null, contact_email || null, contact_phone || null, institution_type || 'Engineering']);
 
-    return res.status(201).json(db.prepare('SELECT * FROM institutions WHERE id = ?').get(result.lastInsertRowid));
+    const created = await db.prepare('SELECT * FROM institutions WHERE id = ?').get(result.lastInsertRowid);
+    return res.status(201).json(created);
   } catch (err: any) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.message && err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'AICTE ID already registered' });
     }
     return res.status(500).json({ error: 'Failed to create institution', details: err.message });

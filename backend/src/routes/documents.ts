@@ -9,8 +9,8 @@ import { UPLOAD_DIR_PATH } from '../middleware/upload';
 const router = express.Router();
 
 // POST /api/documents/:id/view-token - Generate a short-lived (60s) single-use document token
-router.post('/:id/view-token', authenticate, (req: AuthRequest, res) => {
-  const doc = db.prepare(`
+router.post('/:id/view-token', authenticate, async (req: AuthRequest, res) => {
+  const doc = await db.prepare(`
     SELECT d.id, f.institution_id
     FROM fdr_documents d
     JOIN fdrs f ON d.fdr_id = f.id
@@ -37,7 +37,7 @@ router.post('/:id/view-token', authenticate, (req: AuthRequest, res) => {
 });
 
 // GET /api/documents/stream/:id - Secure, authorized document streaming
-router.get('/stream/:id', (req: any, res) => {
+router.get('/stream/:id', async (req: any, res) => {
   // Support either standard Authorization header OR short-lived single-use view token
   let authenticatedUser: any = null;
 
@@ -65,7 +65,7 @@ router.get('/stream/:id', (req: any, res) => {
     return res.status(401).json({ error: 'Unauthorized: Valid authentication token or view token required to access financial records.' });
   }
 
-  const doc = db.prepare(`
+  const doc = await db.prepare(`
     SELECT d.*, f.institution_id, f.fdr_number
     FROM fdr_documents d
     JOIN fdrs f ON d.fdr_id = f.id

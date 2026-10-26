@@ -1,10 +1,10 @@
 import { db } from '../db/database';
 
-export function generateAlerts() {
+export async function generateAlerts(): Promise<number> {
   const today = new Date();
 
   // Get all active FDRs
-  const fdrs = db.prepare(`
+  const fdrs = await db.prepare(`
     SELECT f.*, i.name as institution_name 
     FROM fdrs f
     JOIN institutions i ON f.institution_id = i.id
@@ -19,19 +19,21 @@ export function generateAlerts() {
 
     // Update status based on days to maturity
     if (daysToMaturity < 0 && fdr.status === 'Active') {
-      db.prepare('UPDATE fdrs SET status = ? WHERE id = ?').run('Matured', fdr.id);
+      await db.prepare('UPDATE fdrs SET status = ? WHERE id = ?').run('Matured', fdr.id);
     } else if (daysToMaturity >= 0 && daysToMaturity <= 30 && fdr.status === 'Active') {
-      db.prepare('UPDATE fdrs SET status = ? WHERE id = ?').run('Expiring Soon', fdr.id);
+      await db.prepare('UPDATE fdrs SET status = ? WHERE id = ?').run('Expiring Soon', fdr.id);
     }
 
     // Check for existing unresolved alerts for this FDR+type
-    const existingAlert = (type: string) => db.prepare(
-      'SELECT id FROM alerts WHERE fdr_id = ? AND alert_type = ? AND is_resolved = 0'
-    ).get(fdr.id, type);
+    const checkAlert = async (type: string) => {
+      return await db.prepare(
+        'SELECT id FROM alerts WHERE fdr_id = ? AND alert_type = ? AND is_resolved = 0'
+      ).get(fdr.id, type);
+    };
 
     // Critical: maturing within 10 days
-    if (daysToMaturity >= 0 && daysToMaturity <= 10 && !existingAlert('Maturity')) {
-      db.prepare(`
+    if (daysToMaturity >= 0 && daysToMaturity <= 10 && !(await checkAlert('Maturity'))) {
+      await db.prepare(`
         INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
         VALUES (?, ?, 'Maturity', 'Critical', ?, ?)
       `).run(
@@ -42,8 +44,8 @@ export function generateAlerts() {
       alertsCreated++;
     }
     // High: maturing within 30 days
-    else if (daysToMaturity > 10 && daysToMaturity <= 30 && !existingAlert('Maturity')) {
-      db.prepare(`
+    else if (daysToMaturity > 10 && daysToMaturity <= 30 && !(await checkAlert('Maturity'))) {
+      await db.prepare(`
         INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
         VALUES (?, ?, 'Maturity', 'High', ?, ?)
       `).run(
@@ -54,8 +56,8 @@ export function generateAlerts() {
       alertsCreated++;
     }
     // Medium: maturing within 90 days
-    else if (daysToMaturity > 30 && daysToMaturity <= 90 && !existingAlert('Maturity')) {
-      db.prepare(`
+    else if (daysToMaturity > 30 && daysToMaturity <= 90 && !(await checkAlert('Maturity'))) {
+      await db.prepare(`
         INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
         VALUES (?, ?, 'Maturity', 'Medium', ?, ?)
       `).run(
@@ -67,8 +69,8 @@ export function generateAlerts() {
     }
 
     // Matured but not renewed
-    if (daysToMaturity < 0 && fdr.status === 'Matured' && !existingAlert('Renewal')) {
-      db.prepare(`
+    if (daysToMaturity < 0 && fdr.status === 'Matured' && !(await checkAlert('Renewal'))) {
+      await db.prepare(`
         INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
         VALUES (?, ?, 'Renewal', 'High', ?, ?)
       `).run(
@@ -79,8 +81,8 @@ export function generateAlerts() {
       alertsCreated++;
 
       // If matured more than 30 days ago without renewal, flag statutory escalation
-      if (Math.abs(daysToMaturity) >= 30 && !existingAlert('Overdue')) {
-        db.prepare(`
+      if (Math.abs(daysToMaturity) >= 30 && !(await checkAlert('Overdue'))) {
+        await db.prepare(`
           INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
           VALUES (?, ?, 'Overdue', 'Critical', ?, ?)
         `).run(
@@ -93,11 +95,12 @@ export function generateAlerts() {
     }
 
     // Missing documents
-    const docCount = (db.prepare(
+    const docRow = await db.prepare(
       'SELECT COUNT(*) as cnt FROM fdr_documents WHERE fdr_id = ? AND is_active = 1'
-    ).get(fdr.id) as any).cnt;
-    if (docCount === 0 && !existingAlert('Missing_Doc')) {
-      db.prepare(`
+    ).get(fdr.id) as any;
+    const docCount = docRow ? Number(docRow.cnt) : 0;
+    if (docCount === 0 && !(await checkAlert('Missing_Doc'))) {
+      await db.prepare(`
         INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
         VALUES (?, ?, 'Missing_Doc', 'Medium', ?)
       `).run(
@@ -108,8 +111,8 @@ export function generateAlerts() {
     }
 
     // Discrepancy
-    if (fdr.verification_status === 'Discrepancy' && !existingAlert('Discrepancy')) {
-      db.prepare(`
+    if (fdr.verification_status === 'Discrepancy' && !(await checkAlert('Discrepancy'))) {
+      await db.prepare(`
         INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
         VALUES (?, ?, 'Discrepancy', 'Critical', ?)
       `).run(

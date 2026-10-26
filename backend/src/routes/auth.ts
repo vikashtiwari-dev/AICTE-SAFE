@@ -14,7 +14,7 @@ router.post('/login', authLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE username = ? AND is_active = 1').get(username) as any;
+  const user = await db.prepare('SELECT * FROM users WHERE username = ? AND is_active = 1').get(username) as any;
   if (!user) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -54,8 +54,8 @@ router.post('/login', authLimiter, async (req, res) => {
 });
 
 // GET /api/auth/me
-router.get('/me', authenticate, (req: AuthRequest, res) => {
-  const user = db.prepare('SELECT id, username, full_name, email, role, institution_id FROM users WHERE id = ?').get(req.user!.userId) as any;
+router.get('/me', authenticate, async (req: AuthRequest, res) => {
+  const user = await db.prepare('SELECT id, username, full_name, email, role, institution_id FROM users WHERE id = ?').get(req.user!.userId) as any;
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }

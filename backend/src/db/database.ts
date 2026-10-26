@@ -28,9 +28,12 @@ if (dbUrl) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   try {
     let cleanDbUrl = dbUrl;
-    if (cleanDbUrl.includes('sslmode=')) {
-      cleanDbUrl = cleanDbUrl.replace(/[?&]sslmode=[^&]+/, '');
-    }
+    try {
+      const u = new URL(dbUrl);
+      u.search = '';
+      cleanDbUrl = u.toString();
+    } catch (_) {}
+
     pgPool = new Pool({
       connectionString: cleanDbUrl,
       ssl: { rejectUnauthorized: false },

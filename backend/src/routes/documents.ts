@@ -11,12 +11,12 @@ const router = express.Router();
 
 // POST /api/documents/:id/view-token - Generate a short-lived (60s) single-use document token
 router.post('/:id/view-token', authenticate, async (req: AuthRequest, res) => {
-  const doc = await db.prepare(`
+  const doc = await db.queryOne(`
     SELECT d.id, f.institution_id
     FROM fdr_documents d
     JOIN fdrs f ON d.fdr_id = f.id
     WHERE d.id = ? AND d.is_active = 1
-  `).get(req.params.id) as any;
+  `, [req.params.id]) as any;
 
   if (!doc) {
     return res.status(404).json({ error: 'Document not found' });
@@ -44,7 +44,6 @@ router.post('/:id/view-token', authenticate, async (req: AuthRequest, res) => {
 router.get('/stream/:id', async (req: any, res) => {
   // Support either standard Authorization header OR short-lived single-use view token
   let authenticatedUser: any = null;
-  let singleUseJti: string | null = null;
 
   const authHeader = req.headers.authorization;
   const queryToken = req.query.token || req.query.viewToken;
@@ -61,16 +60,18 @@ router.get('/stream/:id', async (req: any, res) => {
         if (Number(payload.docId) !== Number(req.params.id)) {
           return res.status(403).json({ error: 'Security violation: View token does not match requested document.' });
         }
-        if (payload.jti) {
-          // Verify if token has already been consumed
-          const alreadyConsumed = await db.queryOne(
-            'SELECT token_jti FROM consumed_view_tokens WHERE token_jti = ?',
-            [payload.jti]
-          );
-          if (alreadyConsumed) {
-            return res.status(403).json({ error: 'Security violation: This single-use view token has already been consumed.' });
-          }
-          singleUseJti = payload.jti;
+        if (!payload.jti) {
+          return res.status(403).json({ error: 'Security violation: View token is missing unique single-use JTI identifier.' });
+        }
+
+        // Atomically claim single-use token; conflict strictly rejects replay
+        const consumeRes = await db.execute(
+          'INSERT INTO consumed_view_tokens (token_jti, document_id) VALUES (?, ?) ON CONFLICT (token_jti) DO NOTHING',
+          [payload.jti, Number(payload.docId)]
+        );
+
+        if (consumeRes.changes === 0) {
+          return res.status(403).json({ error: 'Security violation: This single-use view token has already been consumed.' });
         }
       }
       authenticatedUser = payload;
@@ -81,12 +82,12 @@ router.get('/stream/:id', async (req: any, res) => {
     return res.status(401).json({ error: 'Unauthorized: Valid authentication token or view token required to access financial records.' });
   }
 
-  const doc = await db.prepare(`
+  const doc = await db.queryOne(`
     SELECT d.*, f.institution_id, f.fdr_number
     FROM fdr_documents d
     JOIN fdrs f ON d.fdr_id = f.id
     WHERE d.id = ? AND d.is_active = 1
-  `).get(req.params.id) as any;
+  `, [req.params.id]) as any;
 
   if (!doc) {
     return res.status(404).json({ error: 'Document not found or has been revoked' });
@@ -95,16 +96,6 @@ router.get('/stream/:id', async (req: any, res) => {
   // Institution isolation check
   if (authenticatedUser.role === 'institution_user' && doc.institution_id !== authenticatedUser.institution_id) {
     return res.status(403).json({ error: 'Access denied: You do not possess clearance for this institutional record.' });
-  }
-
-  // Atomically consume single-use token if verified
-  if (singleUseJti) {
-    try {
-      await db.execute(
-        'INSERT INTO consumed_view_tokens (token_jti, document_id) VALUES (?, ?)',
-        [singleUseJti, doc.id]
-      );
-    } catch (_) {}
   }
 
   // 1. Durably stream from cloud database payload (PostgreSQL bytea) if available

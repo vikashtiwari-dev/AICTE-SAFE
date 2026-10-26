@@ -74,14 +74,24 @@ router.post('/verify-sfms', authenticate, (req: AuthRequest, res) => {
   return res.json(result);
 });
 
+function parseBoolean(val: any): boolean {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'number') return val === 1;
+  if (typeof val === 'string') {
+    const s = val.trim().toLowerCase();
+    return s === 'true' || s === '1' || s === 'yes';
+  }
+  return false;
+}
+
 // POST /api/fdrs/aph-calculate - Statutory APH Security Deposit Calculator
 router.post('/aph-calculate', authenticate, (req: AuthRequest, res) => {
   const { programme_key, institution_type, minority_status, is_women_only, is_remote_region } = req.body;
   const result = calculateRequiredDeposit({
     programme_key: programme_key || institution_type || 'Engineering_UG',
-    is_minority_institution: Boolean(minority_status),
-    is_women_institution: Boolean(is_women_only),
-    is_special_region: Boolean(is_remote_region)
+    is_minority_institution: parseBoolean(minority_status),
+    is_women_institution: parseBoolean(is_women_only),
+    is_special_region: parseBoolean(is_remote_region)
   });
   return res.json(result);
 });
@@ -282,24 +292,49 @@ const VALID_FDR_TRANSITIONS: Record<string, string[]> = {
   'Forfeited': [] // Terminal
 };
 
-// PUT /api/fdrs/:id - Update with validated state transitions
+// PUT /api/fdrs/:id - Update with validated state transitions & non-destructive partial updates
 router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
-  const fdr = await db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
+  const fdr = await db.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
   const { bank_name, bank_branch, account_number, deposit_amount, issue_date, maturity_date, interest_rate, deposit_type, purpose, remarks, status } = req.body;
 
-  // Validate state transition if status is being updated
+  // Validate state transition if status is being updated (strictly enforced for all roles including admin)
   const targetStatus = status || fdr.status;
   if (status && status !== fdr.status) {
     const allowed = VALID_FDR_TRANSITIONS[fdr.status] || [];
-    if (!allowed.includes(status) && req.user!.role !== 'admin') {
+    if (!allowed.includes(status)) {
       return res.status(400).json({
         error: `Invalid status transition: Cannot change status from "${fdr.status}" to "${status}".`,
         allowed_transitions: allowed
       });
     }
   }
+
+  // Non-destructive partial field resolution
+  const updatedBankName = bank_name !== undefined ? bank_name.trim() : fdr.bank_name;
+  const updatedBranch = bank_branch !== undefined ? bank_branch : fdr.bank_branch;
+  const updatedAccount = account_number !== undefined ? account_number : fdr.account_number;
+  
+  let updatedAmount = fdr.deposit_amount;
+  if (deposit_amount !== undefined) {
+    const parsed = parseFloat(deposit_amount);
+    if (isNaN(parsed) || parsed <= 0) {
+      return res.status(400).json({ error: 'Deposit amount must be a positive numeric value.' });
+    }
+    updatedAmount = parsed;
+  }
+
+  const updatedIssueDate = issue_date !== undefined ? issue_date : fdr.issue_date;
+  const updatedMaturityDate = maturity_date !== undefined ? maturity_date : fdr.maturity_date;
+  if (updatedIssueDate && updatedMaturityDate && updatedIssueDate > updatedMaturityDate) {
+    return res.status(400).json({ error: 'Maturity date cannot precede the issue date.' });
+  }
+
+  const updatedInterestRate = interest_rate !== undefined ? (interest_rate ? parseFloat(interest_rate) : null) : fdr.interest_rate;
+  const updatedDepositType = deposit_type !== undefined ? deposit_type : fdr.deposit_type;
+  const updatedPurpose = purpose !== undefined ? purpose : fdr.purpose;
+  const updatedRemarks = remarks !== undefined ? remarks : fdr.remarks;
 
   const oldState = JSON.stringify({ status: fdr.status, deposit_amount: fdr.deposit_amount });
 
@@ -311,18 +346,16 @@ router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async
           remarks = ?, status = ?, last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `, [
-        bank_name || fdr.bank_name, bank_branch || null, account_number || null,
-        deposit_amount ? parseFloat(deposit_amount) : fdr.deposit_amount,
-        issue_date || fdr.issue_date, maturity_date || fdr.maturity_date,
-        interest_rate ? parseFloat(interest_rate) : fdr.interest_rate,
-        deposit_type || fdr.deposit_type, purpose || null,
-        remarks || null, targetStatus, req.user!.userId, req.params.id
+        updatedBankName, updatedBranch, updatedAccount, updatedAmount,
+        updatedIssueDate, updatedMaturityDate, updatedInterestRate,
+        updatedDepositType, updatedPurpose, updatedRemarks, targetStatus,
+        req.user!.userId, req.params.id
       ]);
 
       await tx.execute(`
         INSERT INTO audit_log (entity_type, entity_id, action, changed_by, old_value, new_value, notes)
         VALUES ('FDR', ?, 'Updated', ?, ?, ?, ?)
-      `, [req.params.id, req.user!.userId, oldState, JSON.stringify({ status: targetStatus, deposit_amount }), `FDR parameters updated by ${req.user!.username}`]);
+      `, [req.params.id, req.user!.userId, oldState, JSON.stringify({ status: targetStatus, deposit_amount: updatedAmount }), `FDR parameters updated by ${req.user!.username}`]);
 
       return await tx.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]);
     });
@@ -333,15 +366,29 @@ router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async
   }
 });
 
-// PATCH /api/fdrs/:id/verify - Strictly enforce verification policy
+// PATCH /api/fdrs/:id/verify - Strictly enforce verification policy & require uploaded evidence
 router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const { verification_status, verification_notes } = req.body;
-  const fdr = await db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
+  const fdr = await db.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
   const allowedStatuses = ['Verified', 'Discrepancy', 'Under Scrutiny', 'Unverified'];
   if (!allowedStatuses.includes(verification_status)) {
     return res.status(400).json({ error: `Invalid verification status. Must be one of: ${allowedStatuses.join(', ')}` });
+  }
+
+  // Require documented evidence before granting Verified status
+  if (verification_status === 'Verified') {
+    const docCountRow = await db.queryOne(
+      'SELECT COUNT(*) as count FROM fdr_documents WHERE fdr_id = ? AND is_active = 1',
+      [fdr.id]
+    ) as any;
+    const docCount = docCountRow ? Number(docCountRow.count) : 0;
+    if (docCount === 0) {
+      return res.status(400).json({
+        error: 'Regulatory evidence rejection: An instrument cannot be marked Verified without at least one authentic active bank certificate or FDR document uploaded as evidence.'
+      });
+    }
   }
 
   if (verification_status === 'Discrepancy' && (!verification_notes || verification_notes.trim().length < 5)) {
@@ -421,13 +468,22 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
 
     try {
       const createdDoc = await db.transaction(async (tx) => {
+        const docType = req.body.document_type || 'Supporting_Doc';
+
+        // Calculate document version sequence for audit versioning
+        const prevVerRow = await tx.queryOne(
+          'SELECT COALESCE(MAX(version), 0) as max_v FROM fdr_documents WHERE fdr_id = ? AND document_type = ?',
+          [fdr.id, docType]
+        ) as any;
+        const nextVersion = Number(prevVerRow?.max_v || 0) + 1;
+
         const result = await tx.execute(`
-          INSERT INTO fdr_documents (fdr_id, document_type, file_name, file_path, file_size, mime_type, sha256_hash, verified_on_chain, uploaded_by)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+          INSERT INTO fdr_documents (fdr_id, document_type, file_name, file_path, file_size, mime_type, sha256_hash, verified_on_chain, uploaded_by, version)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
         `, [
-          fdr.id, req.body.document_type || 'Supporting_Doc',
+          fdr.id, docType,
           req.file!.originalname, req.file!.filename,
-          req.file!.size, req.file!.mimetype, sha256Hash, req.user!.userId
+          req.file!.size, req.file!.mimetype, sha256Hash, req.user!.userId, nextVersion
         ]);
 
         const docId = result.lastInsertRowid;
@@ -440,10 +496,13 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
           `, [docId, fileBuffer, req.file!.mimetype, req.file!.originalname]);
         }
 
+        // Clean up temporary local staging file so no sensitive unencrypted file remains on server disk
+        try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch (_) {}
+
         await tx.execute(`
           INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
           VALUES ('FDR', ?, 'Document Uploaded', ?, ?, ?)
-        `, [fdr.id, req.user!.userId, JSON.stringify({ document_name: req.file!.originalname, sha256: sha256Hash }), `Document ${req.file!.originalname} anchored durably in cloud`]);
+        `, [fdr.id, req.user!.userId, JSON.stringify({ document_name: req.file!.originalname, sha256: sha256Hash, version: nextVersion }), `Document ${req.file!.originalname} (v${nextVersion}) anchored durably in cloud`]);
 
         return await tx.queryOne('SELECT * FROM fdr_documents WHERE id = ?', [docId]);
       });

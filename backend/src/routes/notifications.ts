@@ -66,35 +66,27 @@ router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_offic
       `).get(fdr.id, stage);
 
       if (!alreadySent) {
+        const phone = fdr.contact_phone || '+91 98100 00000';
+        const email = fdr.contact_email || 'accounts@institution.edu.in';
+        const msg = `AICTE Statutory Reminder: FDR ${fdr.fdr_number} for ${fdr.inst_name} matures in ${diffDays} days. Ensure timely renewal under Approval Process Handbook (APH) rules.`;
+
         // Send WhatsApp Nudge to Principal
         await db.prepare(`
-          INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
-          VALUES (?, ?, 'WhatsApp', 'Principal', ?, ?, ?, 'Delivered')
-        `).run(
-          fdr.institution_id, fdr.id, fdr.contact_phone || '+91 98100 00000',
-          `AICTE Statutory Reminder: FDR ${fdr.fdr_number} for ${fdr.inst_name} matures in ${diffDays} days. Ensure timely renewal under Approval Process Handbook (APH) rules.`,
-          stage
-        );
+          INSERT INTO notifications_log (institution_id, fdr_id, notification_type, channel, recipient, message, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status, status)
+          VALUES (?, ?, 'Maturity_Nudge', 'WhatsApp', ?, ?, 'Principal', ?, ?, ?, 'Delivered', 'SENT')
+        `).run(fdr.institution_id, fdr.id, phone, msg, phone, msg, stage);
 
         // Send Email to Accounts Officer
         await db.prepare(`
-          INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
-          VALUES (?, ?, 'Email', 'Accounts_Officer', ?, ?, ?, 'Delivered')
-        `).run(
-          fdr.institution_id, fdr.id, fdr.contact_email,
-          `Statutory Notice: Fixed Deposit Receipt #${fdr.fdr_number} (${fdr.bank_name}) with maturity date ${fdr.maturity_date} requires renewal. Log into AICTE SAFE to upload fresh receipt.`,
-          stage
-        );
+          INSERT INTO notifications_log (institution_id, fdr_id, notification_type, channel, recipient, message, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status, status)
+          VALUES (?, ?, 'Maturity_Nudge', 'Email', ?, ?, 'Accounts_Officer', ?, ?, ?, 'Delivered', 'SENT')
+        `).run(fdr.institution_id, fdr.id, email, msg, email, msg, stage);
 
         // Send SMS to Chairman
         await db.prepare(`
-          INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
-          VALUES (?, ?, 'SMS', 'Chairman', ?, ?, ?, 'Delivered')
-        `).run(
-          fdr.institution_id, fdr.id, fdr.contact_phone || '+91 99999 88888',
-          `AICTE Regulatory Alert: Security deposit instrument ${fdr.fdr_number} expiring in ${diffDays} days. Avoid APH penalty by submitting renewal receipt.`,
-          stage
-        );
+          INSERT INTO notifications_log (institution_id, fdr_id, notification_type, channel, recipient, message, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status, status)
+          VALUES (?, ?, 'Maturity_Nudge', 'SMS', ?, ?, 'Chairman', ?, ?, ?, 'Delivered', 'SENT')
+        `).run(fdr.institution_id, fdr.id, phone, msg, phone, msg, stage);
 
         nudgesSent += 3;
       }

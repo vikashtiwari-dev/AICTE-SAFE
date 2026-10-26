@@ -22,9 +22,31 @@ import documentRoutes from './routes/documents';
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 
-// Production Security Headers & Rate Limiting
+// Production Security Headers & Strict Origin Restriction
 app.use(securityHeaders);
-app.use(cors({ origin: true, credentials: true }));
+
+const allowedOrigins = [
+  'https://aicte-safe.vercel.app',
+  process.env.FRONTEND_URL,
+  process.env.APP_URL,
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+].filter(Boolean) as string[];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Permit server-to-server or requests without origin header (e.g. cron, health checks, curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      return callback(null, true);
+    }
+    return callback(new Error('Cross-Origin Request Blocked by AICTE-SAFE Security Policy'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 

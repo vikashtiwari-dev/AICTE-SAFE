@@ -27,29 +27,39 @@ export interface ExtractedFDRData {
 }
 
 /**
- * Standardizes DD/MM/YYYY or YYYY-MM-DD into ISO YYYY-MM-DD
+ * Standardizes DD/MM/YYYY or YYYY-MM-DD into ISO YYYY-MM-DD with strict calendar validation
  */
 function normalizeDate(raw: string): string | null {
   if (!raw) return null;
   const clean = raw.trim();
-  // Match YYYY-MM-DD
+  let day: number, month: number, year: number;
+
   if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) {
-    const d = new Date(clean);
-    return isNaN(d.getTime()) ? null : clean;
+    const parts = clean.split('-');
+    year = parseInt(parts[0], 10);
+    month = parseInt(parts[1], 10);
+    day = parseInt(parts[2], 10);
+  } else if (/^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}$/.test(clean)) {
+    const parts = clean.split(/[\/\-]/);
+    day = parseInt(parts[0], 10);
+    month = parseInt(parts[1], 10);
+    year = parseInt(parts[2], 10);
+  } else {
+    return null;
   }
-  // Match DD/MM/YYYY or DD-MM-YYYY
-  const parts = clean.split(/[\/\-]/);
-  if (parts.length === 3) {
-    if (parts[2].length === 4) {
-      const day = parts[0].padStart(2, '0');
-      const month = parts[1].padStart(2, '0');
-      const year = parts[2];
-      const iso = `${year}-${month}-${day}`;
-      const d = new Date(iso);
-      return isNaN(d.getTime()) ? null : iso;
-    }
-  }
-  return null;
+
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > 31) return null;
+  if (year < 1990 || year > 2060) return null;
+
+  // Strict calendar check: ensure day does not overflow month capacity (e.g. rejects 31 Feb)
+  const daysInMonth = new Date(year, month, 0).getDate();
+  if (day > daysInMonth) return null;
+
+  const yStr = String(year);
+  const mStr = String(month).padStart(2, '0');
+  const dStr = String(day).padStart(2, '0');
+  return `${yStr}-${mStr}-${dStr}`;
 }
 
 /**
@@ -212,23 +222,48 @@ export async function extractFDRFromDocument(
       depositAmount = parsed;
     }
   }
+
+  // Support Indian Lakh / Crore written notations (e.g. "35 Lakh" or "1.5 Crore")
+  if (!depositAmount) {
+    const croreMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)?[:.\s]*([0-9]+(?:\.[0-9]+)?)\s*(?:crore|cr|crores)\b/i);
+    const lakhMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)?[:.\s]*([0-9]+(?:\.[0-9]+)?)\s*(?:lakh|lac|lacs|lakhs)\b/i);
+    if (croreMatch) {
+      const crVal = parseFloat(croreMatch[1]);
+      if (!isNaN(crVal) && crVal > 0) depositAmount = Math.round(crVal * 10000000);
+    } else if (lakhMatch) {
+      const lkVal = parseFloat(lakhMatch[1]);
+      if (!isNaN(lkVal) && lkVal > 0) depositAmount = Math.round(lkVal * 100000);
+    }
+  }
+
   const ifscCode = ifscMatch ? ifscMatch[1].trim().toUpperCase() : null;
   const accountNumber = accountMatch ? accountMatch[1].trim() : null;
   const interestRate = rateMatch ? parseFloat(rateMatch[1]) : null;
 
-  let issueDate: string | null = null;
-  let maturityDate: string | null = null;
-  if (normalizedDates.length >= 2) {
+  // Explicit date label matching
+  const explicitIssueMatch = fileText.match(/(?:issue\s*date|date\s*of\s*issue|deposit\s*date|opened\s*on)[:.\s]*([0-3]?[0-9][\/\-][0-1]?[0-9][\/\-]20[2-3][0-9]|20[2-3][0-9]-[0-1][0-9]-[0-3][0-9])/i);
+  const explicitMaturityMatch = fileText.match(/(?:maturity\s*date|date\s*of\s*maturity|due\s*date|expires\s*on)[:.\s]*([0-3]?[0-9][\/\-][0-1]?[0-9][\/\-]20[2-3][0-9]|20[2-3][0-9]-[0-1][0-9]-[0-3][0-9])/i);
+
+  let issueDate: string | null = explicitIssueMatch ? normalizeDate(explicitIssueMatch[1]) : null;
+  let maturityDate: string | null = explicitMaturityMatch ? normalizeDate(explicitMaturityMatch[1]) : null;
+
+  if (!issueDate && normalizedDates.length >= 1) {
     issueDate = normalizedDates[0];
+  }
+  if (!maturityDate && normalizedDates.length >= 2) {
     maturityDate = normalizedDates[normalizedDates.length - 1];
-  } else if (normalizedDates.length === 1) {
-    issueDate = normalizedDates[0];
+  }
+
+  const discrepancies: string[] = [];
+
+  // Strict chronological validation: issue date cannot exceed maturity date
+  if (issueDate && maturityDate && issueDate > maturityDate) {
+    discrepancies.push(`Chronological discrepancy: Issue date (${issueDate}) cannot be later than maturity date (${maturityDate})`);
   }
 
   // 6. Mathematical Confidence Computation Based on Genuine Evidence
   const extractedFields: Record<string, { value: any; confidence: number; source: string }> = {};
   const missingFields: string[] = [];
-  const discrepancies: string[] = [];
 
   let evidencePoints = 0;
   const maxPoints = 100;

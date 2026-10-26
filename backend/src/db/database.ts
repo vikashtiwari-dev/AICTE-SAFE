@@ -39,7 +39,6 @@ const rawDbUrl =
     : '');
 
 if (rawDbUrl) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   try {
     let cleanDbUrl = rawDbUrl;
     try {
@@ -48,9 +47,14 @@ if (rawDbUrl) {
       cleanDbUrl = u.toString();
     } catch (_) {}
 
+    // Secure database connection without disabling global process TLS verification
+    const sslConfig = process.env.DATABASE_CA
+      ? { ca: process.env.DATABASE_CA, rejectUnauthorized: true }
+      : { rejectUnauthorized: false };
+
     pgPool = new Pool({
       connectionString: cleanDbUrl,
-      ssl: { rejectUnauthorized: false },
+      ssl: sslConfig,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 7000,
@@ -192,7 +196,13 @@ export function createDB(): DBInterface {
     };
   }
 
-  // Fallback for purely offline local environments without PostgreSQL
+  // Fail closed in production/Vercel: SQLite fallback is strictly prohibited
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    console.error('🚨 [FATAL DATABASE ERROR] Cloud PostgreSQL is required in production/Vercel environments.');
+    throw new Error('FATAL SECURITY VIOLATION: PostgreSQL database connection is unavailable in production. SQLite fallback is strictly prohibited to prevent data loss.');
+  }
+
+  // Fallback ONLY for local offline developer machines without internet/PostgreSQL
   const sqlite = getSqliteFallback();
   return {
     isPostgres: false,
@@ -354,8 +364,12 @@ export async function initializeDatabase() {
           verified_on_chain INTEGER DEFAULT 1,
           uploaded_by INTEGER,
           uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-          is_active INTEGER DEFAULT 1
+          is_active INTEGER DEFAULT 1,
+          version INTEGER DEFAULT 1
         );
+
+        -- Ensure version column exists for document audit versioning
+        ALTER TABLE fdr_documents ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1;
 
         CREATE TABLE IF NOT EXISTS document_payloads (
           fdr_document_id INTEGER PRIMARY KEY REFERENCES fdr_documents(id) ON DELETE CASCADE,

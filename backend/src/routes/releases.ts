@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { db, executeMutation } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { validateLockInEligibility } from '../services/aphService';
@@ -220,11 +221,11 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
     return res.status(403).json({ error: 'Separation of duties violation: Finance Officer who cleared financial concurrence cannot act as Approving Director.' });
   }
 
-  // Generate SHA-256 Statutory Electronic Order Attestation Hash
+  // Generate authentic SHA-256 Statutory Electronic Order Attestation Hash
   const timestamp = new Date().toISOString();
   const orderNumber = `AICTE/REG/FDR-REL/${new Date().getFullYear()}/${request.id.toString().padStart(5, '0')}`;
   const dscPayload = `AICTE-STATUTORY-RELEASE-ORDER|ORDER_NO:${orderNumber}|REQ:${request.id}|FDR:${request.fdr_id}|OFFICER:${signer_name}|TS:${timestamp}`;
-  const dscHash = 'SEAL-SHA256-' + Buffer.from(dscPayload).toString('base64').substring(0, 36).toUpperCase();
+  const dscHash = 'SEAL-SHA256-' + crypto.createHash('sha256').update(dscPayload).digest('hex').toUpperCase();
 
   try {
     // Transition request to Approved with Statutory Order Attestation
@@ -279,6 +280,13 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
   }
 
   const { noc_document_path, discharge_remarks } = req.body;
+
+  // Require documented provenance before discharging regulatory encumbrance
+  if (!noc_document_path && !request.noc_document_path) {
+    return res.status(400).json({
+      error: 'Evidence required: Discharge cannot be completed without providing the verified Bank No-Objection Certificate (NOC) / discharge document reference.'
+    });
+  }
 
   try {
     await db.transaction(async (tx) => {

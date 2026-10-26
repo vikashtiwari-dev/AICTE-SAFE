@@ -105,9 +105,9 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer']), async (
 
     // Audit log
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Lien_Invocation', ?, 'Initiated', ?, ?, ?)
-    `, [result.lastInsertRowid, req.user!.userId, fdr.institution_id, JSON.stringify({ invocation_ref: invocationRef, fdr_number: fdr.fdr_number, demand_amount: amount })]);
+    `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ invocation_ref: invocationRef, fdr_number: fdr.fdr_number, demand_amount: amount }), `Lien Invocation ${invocationRef} opened`]);
 
     return res.status(201).json(db.prepare('SELECT * FROM lien_invocations WHERE id = ?').get(result.lastInsertRowid));
   } catch (err: any) {
@@ -137,9 +137,9 @@ router.post('/:id/show-cause', authenticate, requireRole(['admin', 'bureau_offic
     `, [showCauseRef, deadline, req.body.remarks || `Show cause notice issued with ${cureDays}-day cure window`, req.params.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Lien_Invocation', ?, 'Show-Cause Notice Issued', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, inv.institution_id, JSON.stringify({ show_cause_ref: showCauseRef, deadline })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ show_cause_ref: showCauseRef, deadline }), `Show-Cause Notice ${showCauseRef} served`]);
 
     return res.json({
       success: true,
@@ -170,9 +170,9 @@ router.post('/:id/serve-demand', authenticate, requireRole(['admin', 'bureau_off
     `, [bankDemandRef, req.body.remarks || 'Bank Demand Notice for encashment served on Branch Manager.', req.params.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Lien_Invocation', ?, 'Bank Demand Served', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, inv.institution_id, JSON.stringify({ bank_demand_ref: bankDemandRef })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ bank_demand_ref: bankDemandRef }), `Bank Demand Order ${bankDemandRef} served`]);
 
     return res.json({
       success: true,
@@ -223,9 +223,9 @@ router.patch('/:id/confirm-recovery', authenticate, requireRole(['admin', 'burea
     `, [req.user!.userId, inv.fdr_id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Lien_Invocation', ?, 'Forfeiture Confirmed', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, inv.institution_id, JSON.stringify({ utr: recovery_utr_challan, amount: inv.demand_amount })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ utr: recovery_utr_challan, amount: inv.demand_amount }), `Forfeiture confirmed via UTR ${recovery_utr_challan}`]);
 
     return res.json({
       success: true,
@@ -254,9 +254,9 @@ router.patch('/:id/drop', authenticate, requireRole(['admin']), async (req: Auth
     await executeMutation("UPDATE fdrs SET status = 'Active', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, inv.fdr_id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Lien_Invocation', ?, 'Dropped', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, inv.institution_id, JSON.stringify({ reason: req.body.remarks })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ reason: req.body.remarks }), `Dropped: ${req.body.remarks}`]);
 
     return res.json({ success: true, message: 'Lien Invocation dropped. FDR restored to Active status.' });
   } catch (err: any) {

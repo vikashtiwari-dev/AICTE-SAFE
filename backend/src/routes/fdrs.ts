@@ -225,9 +225,9 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
     ]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('FDR', ?, 'Created', ?, ?, ?)
-    `, [result.lastInsertRowid, req.user!.userId, targetInstitutionId, JSON.stringify({ fdr_number, deposit_amount, status: 'Pending Verification' })]);
+    `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ fdr_number, deposit_amount, status: 'Pending Verification' }), 'New regulatory instrument submitted']);
 
     const newFdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(result.lastInsertRowid);
     return res.status(201).json(newFdr);
@@ -289,9 +289,9 @@ router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async
     ]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, previous_state, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, old_value, new_value, notes)
       VALUES ('FDR', ?, 'Updated', ?, ?, ?, ?)
-    `, [req.params.id, req.user!.userId, fdr.institution_id, oldState, JSON.stringify({ status: targetStatus, deposit_amount })]);
+    `, [req.params.id, req.user!.userId, oldState, JSON.stringify({ status: targetStatus, deposit_amount }), `FDR parameters updated by ${req.user!.username}`]);
 
     return res.json(db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id));
   } catch (err: any) {
@@ -327,13 +327,14 @@ router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer'
     `, [verification_status, verification_notes || null, req.user!.userId, newFdrStatus, req.user!.userId, req.params.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, previous_state, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, old_value, new_value, notes)
       VALUES ('FDR', ?, ?, ?, ?, ?, ?)
     `, [
-      req.params.id, req.user!.userId, fdr.institution_id,
+      req.params.id, req.user!.userId,
       verification_status === 'Verified' ? 'Verification Approved' : 'Discrepancy Flagged',
       JSON.stringify({ verification_status: fdr.verification_status }),
-      JSON.stringify({ verification_status, notes: verification_notes })
+      JSON.stringify({ verification_status, notes: verification_notes }),
+      verification_notes || `Status marked as ${verification_status}`
     ]);
 
     // If discrepancy flagged, create a high-priority alert
@@ -392,9 +393,9 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
       ]);
 
       await executeMutation(`
-        INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
         VALUES ('FDR', ?, 'Document Uploaded', ?, ?, ?)
-      `, [fdr.id, req.user!.userId, fdr.institution_id, JSON.stringify({ document_name: req.file.originalname, sha256: sha256Hash })]);
+      `, [fdr.id, req.user!.userId, JSON.stringify({ document_name: req.file.originalname, sha256: sha256Hash }), `Document ${req.file.originalname} anchored`]);
 
       return res.status(201).json(db.prepare('SELECT * FROM fdr_documents WHERE id = ?').get(result.lastInsertRowid));
     } catch (err: any) {
@@ -428,9 +429,9 @@ router.delete('/:id/documents/:docId', authenticate, requireRole(['admin', 'bure
   try {
     await executeMutation('UPDATE fdr_documents SET is_active = 0 WHERE id = ? AND fdr_id = ?', [req.params.docId, req.params.id]);
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('FDR', ?, 'Document Revoked', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, fdr.institution_id, JSON.stringify({ revoked_document_id: req.params.docId })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ revoked_document_id: req.params.docId }), `Document ${req.params.docId} revoked`]);
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: 'Document deletion failed', details: err.message });
@@ -471,9 +472,9 @@ router.post('/:id/renew', authenticate, requireRole(['admin', 'bureau_officer', 
     await executeMutation("UPDATE fdrs SET status = 'Renewed', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, parentFdr.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('FDR', ?, 'Renewal Created', ?, ?, ?)
-    `, [result.lastInsertRowid, req.user!.userId, parentFdr.institution_id, JSON.stringify({ parent_fdr_id: parentFdr.id, renewal_fdr_number: fdr_number })]);
+    `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ parent_fdr_id: parentFdr.id, renewal_fdr_number: fdr_number }), `Renewal of ${parentFdr.fdr_number}`]);
 
     return res.status(201).json(db.prepare('SELECT * FROM fdrs WHERE id = ?').get(result.lastInsertRowid));
   } catch (err: any) {

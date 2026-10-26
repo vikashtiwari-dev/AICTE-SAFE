@@ -100,9 +100,9 @@ router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer
     `, [req.user!.userId, req.params.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Alert', ?, 'Resolved', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, alert.institution_id, JSON.stringify({ is_resolved: 1, resolved_by: req.user!.userId })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ is_resolved: 1, resolved_by: req.user!.userId }), `Alert #${req.params.id} resolved`]);
 
     return res.json({ success: true, message: 'Alert marked resolved in national compliance registry.' });
   } catch (err: any) {

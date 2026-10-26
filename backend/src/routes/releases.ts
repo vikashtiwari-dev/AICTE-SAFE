@@ -95,9 +95,9 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
     await executeMutation("UPDATE fdrs SET status = 'Under Review for Release', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, fdr_id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Release', ?, 'Request Submitted', ?, ?, ?)
-    `, [result.lastInsertRowid, req.user!.userId, fdr.institution_id, JSON.stringify({ fdr_number: fdr.fdr_number, request_type, reason })]);
+    `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ fdr_number: fdr.fdr_number, request_type, reason }), `Release request submitted by ${req.user!.username}`]);
 
     return res.status(201).json(db.prepare('SELECT * FROM release_requests WHERE id = ?').get(result.lastInsertRowid));
   } catch (err: any) {
@@ -131,9 +131,9 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
     await executeMutation("UPDATE fdrs SET status = 'Active', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, request.fdr_id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Release', ?, 'Release Rejected', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, request.institution_id, JSON.stringify({ rejection_reason: remarks, stage: request.review_stage })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks, stage: request.review_stage }), remarks]);
 
     return res.json({ success: true, message: 'Release request rejected. Instrument returned to Active status.' });
   }
@@ -153,9 +153,9 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
     `, [req.user!.userId, remarks || 'Dealing Assistant primary verification complete: Bank confirmation & lock-in requirements checked.', req.params.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Release', ?, 'Dealing Scrutiny Cleared', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, request.institution_id, JSON.stringify({ next_stage: 'Finance_Officer', remarks })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ next_stage: 'Finance_Officer', remarks }), remarks || 'Forwarded to Finance Officer']);
 
     return res.json({ success: true, message: 'Dealing scrutiny completed. Case forwarded to Finance Officer.' });
   } else if (stage === 'Director_Approval') {
@@ -171,9 +171,9 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
     `, [req.user!.userId, remarks || 'Finance Officer concurrence recorded: Interest reconciliation & no-dues confirmed.', req.params.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Release', ?, 'Finance Review Cleared', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, request.institution_id, JSON.stringify({ next_stage: 'Director_Approval', remarks })]);
+    `, [req.params.id, req.user!.userId, JSON.stringify({ next_stage: 'Director_Approval', remarks }), remarks || 'Forwarded to Director']);
 
     return res.json({ success: true, message: 'Finance concurrence recorded. Forwarded to Director for statutory order approval.' });
   } else {
@@ -213,15 +213,15 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
     `, [req.user!.userId, req.user!.userId, `Formally sanctioned by ${signer_name} (${officer_designation})`, orderNumber, req.params.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('Release', ?, 'Statutory Release Approved', ?, ?, ?)
-    `, [req.params.id, req.user!.userId, request.institution_id, JSON.stringify({
+    `, [req.params.id, req.user!.userId, JSON.stringify({
       order_number: orderNumber,
       seal_hash: dscHash,
       signer: signer_name,
       designation: officer_designation,
       statutory_basis: 'Section 10(k) AICTE Act, 1987'
-    })]);
+    }), `Sanctioned by ${signer_name}`]);
 
     return res.json({
       success: true,
@@ -271,13 +271,13 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
 
     // 3. Record audit trail
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
       VALUES ('FDR', ?, 'Discharged and Released', ?, ?, ?)
-    `, [request.fdr_id, req.user!.userId, request.institution_id, JSON.stringify({
+    `, [request.fdr_id, req.user!.userId, JSON.stringify({
       release_request_id: request.id,
       order_number: request.statutory_order_number,
       discharged_by: req.user!.userId
-    })]);
+    }), 'FDR marked Released in national registry']);
 
     return res.json({
       success: true,

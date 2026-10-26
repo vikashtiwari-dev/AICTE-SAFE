@@ -151,9 +151,9 @@ router.patch('/requests/:id/approve', authenticate, requireRole(['admin', 'burea
     `, [req.user!.userId, request.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, new_state)
-      VALUES ('Institution', ?, 'Onboarding Approved', ?, ?)
-    `, [instResult.lastInsertRowid, req.user!.userId, JSON.stringify({ aicte_id: request.aicte_id, name: request.name })]);
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+      VALUES ('Institution', ?, 'Onboarding Approved', ?, ?, ?)
+    `, [instResult.lastInsertRowid, req.user!.userId, JSON.stringify({ aicte_id: request.aicte_id, name: request.name }), `Approved ${request.name}`]);
 
     const newInstitution = db.prepare('SELECT * FROM institutions WHERE id = ?').get(instResult.lastInsertRowid);
     return res.json({
@@ -188,9 +188,9 @@ router.patch('/requests/:id/reject', authenticate, requireRole(['admin', 'bureau
     `, [remarks, req.user!.userId, request.id]);
 
     await executeMutation(`
-      INSERT INTO audit_log (entity_type, entity_id, action, user_id, new_state)
-      VALUES ('InstitutionRequest', ?, 'Onboarding Rejected', ?, ?)
-    `, [request.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks })]);
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+      VALUES ('InstitutionRequest', ?, 'Onboarding Rejected', ?, ?, ?)
+    `, [request.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks }), remarks]);
 
     return res.json({ message: 'Institution onboarding request rejected.', remarks });
   } catch (err: any) {

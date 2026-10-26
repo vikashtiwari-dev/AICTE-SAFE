@@ -157,7 +157,8 @@ export function validateSFMS_IFN760(messageText: string) {
 
 /**
  * NeSL (National E-Governance Services Ltd) e-BG Verification Simulator
- * Explicitly labelled as a Demonstration/Sandbox Gateway for hackathon demonstration.
+ * Strictly labelled as a Prototype Demonstration / Sandbox Validator.
+ * Does NOT claim real-time live clearance without authentic NeSL HSM credentials.
  */
 export function verifyNeSLeBG(neslId: string, fdrAmount: number, bankName: string) {
   const cleanId = (neslId || '').trim().toUpperCase();
@@ -166,21 +167,24 @@ export function verifyNeSLeBG(neslId: string, fdrAmount: number, bankName: strin
   const stampDutyAmount = Math.max(500, Math.round(fdrAmount * 0.001)); // standard 0.1% e-stamping
 
   return {
-    verified: isValidFormat,
+    verified: false, // Honest: Live clearance requires RBI/NeSL PKI enterprise gateway credentials
+    format_valid: isValidFormat,
+    simulation_sandbox: true,
+    requires_live_gateway: true,
     nesl_identifier: cleanId,
-    e_stamping_certificate: `ESTAMP-MH-${cleanId.replace(/[^0-9]/g, '').slice(0, 8) || '20268899'}`,
-    stamp_duty_paid: stampDutyAmount,
+    e_stamping_certificate: isValidFormat ? `ESTAMP-MH-${cleanId.replace(/[^0-9]/g, '').slice(0, 8) || '20268899'}` : null,
+    stamp_duty_calculated: stampDutyAmount,
     stamp_duty_state: 'Government of Maharashtra / Delhi NCT',
     article_code: 'Article 13A - Security Deposit / Bank Guarantee',
-    digital_signature_valid: isValidFormat,
-    certifying_authority: 'e-Mudhra / CCA Licensed CA (Prototype Sandbox)',
-    signer_name: `${bankName} Authorized Signatory (Scale-IV Officer)`,
+    digital_signature_valid: false, // Cryptographic signature check requires NeSL HSM / DSC key
+    certifying_authority: 'Simulated Sandbox (Requires NeSL / CCA Production Gateway Credentials)',
+    signer_name: isValidFormat ? `${bankName} Authorized Signatory (Simulated)` : null,
     timestamp: new Date().toISOString(),
-    status: isValidFormat ? 'ACTIVE_AND_BOUND' : 'INVALID_NESL_FORMAT',
-    verification_tier: 'NESL_ELECTRONIC_STAMP_VALIDATED_SANDBOX',
-    integration_disclosure: 'Prototype API integration with simulated NeSL verification sandbox.',
+    status: isValidFormat ? 'SANDBOX_FORMAT_VALIDATED' : 'INVALID_NESL_FORMAT',
+    verification_tier: 'NESL_SANDBOX_SIMULATION_ONLY',
+    integration_disclosure: 'Prototype API integration: Syntactic validation only. Live NeSL e-BG clearance requires production API gateway certificate.',
     message: isValidFormat
-      ? `NeSL e-BG record authenticated against NeSL schema repository. Digital stamp duty ₹${stampDutyAmount.toLocaleString('en-IN')} confirmed.`
+      ? `NeSL identifier "${cleanId}" passed structural schema validation. Note: Regulatory confirmation requires live NeSL Information Utility gateway credentials.`
       : `Identifier "${cleanId}" does not conform to valid NeSL electronic guarantee reference standards.`
   };
 }

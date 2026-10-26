@@ -21,15 +21,23 @@ export interface DBInterface {
 }
 
 let pgPool: Pool | null = null;
-const dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_DATABASE_URL || process.env.POSTGRES_URL;
+const rawDbUrl =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL_NON_POOLING ||
+  process.env.POSTGRES_URL ||
+  process.env.SUPABASE_DATABASE_URL ||
+  process.env.POSTGRES_PRISMA_URL ||
+  (process.env.POSTGRES_HOST && process.env.POSTGRES_USER
+    ? `postgres://${encodeURIComponent(process.env.POSTGRES_USER)}:${encodeURIComponent(process.env.POSTGRES_PASSWORD || '')}@${process.env.POSTGRES_HOST}:${process.env.POSTGRES_PORT || 5432}/${process.env.POSTGRES_DATABASE || 'postgres'}`
+    : '');
 
-if (dbUrl) {
+if (rawDbUrl) {
   // Supabase pooler uses custom AWS TLS certificates in serverless environments
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   try {
-    let cleanDbUrl = dbUrl;
+    let cleanDbUrl = rawDbUrl;
     try {
-      const u = new URL(dbUrl);
+      const u = new URL(rawDbUrl);
       u.search = '';
       cleanDbUrl = u.toString();
     } catch (_) {}

@@ -4,12 +4,13 @@ import crypto from 'crypto';
 
 // In production, reject static default fallback secrets to prevent token forgery
 function resolveJWTSecret(): string {
-  if (process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 16) {
-    return process.env.JWT_SECRET;
+  const configuredSecret = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
+  if (configuredSecret && configuredSecret.trim().length >= 16) {
+    return configuredSecret.trim();
   }
 
   if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
-    console.error('🚨 [FATAL SECURITY ERROR] JWT_SECRET is not configured in production environment!');
+    console.error('🚨 [FATAL SECURITY ERROR] JWT_SECRET must be configured with >= 16 chars in production!');
     process.exit(1);
   }
 
@@ -33,19 +34,12 @@ export interface AuthRequest extends Request {
 }
 
 export function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
-  let token: string | undefined;
-
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7);
-  } else if (req.query && typeof req.query.token === 'string') {
-    // Restricted query token usage specifically for secure browser document viewing streams
-    token = req.query.token;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: Valid Bearer token required in Authorization header' });
   }
 
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized - Token required' });
-  }
+  const token = authHeader.substring(7);
 
   try {
     const payload = jwt.verify(token, JWT_SECRET) as any;

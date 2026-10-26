@@ -102,11 +102,22 @@ CREATE TABLE IF NOT EXISTS release_requests (
   reason TEXT NOT NULL,
   requested_by INTEGER NOT NULL REFERENCES users(id),
   requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  status VARCHAR(50) DEFAULT 'Pending',
-  reviewed_by INTEGER REFERENCES users(id),
-  reviewed_at TIMESTAMP,
+  status VARCHAR(50) DEFAULT 'Submitted',
+  review_stage VARCHAR(50) DEFAULT 'Dealing_Officer',
+  dealing_officer_id INTEGER REFERENCES users(id),
+  dealing_officer_remarks TEXT,
+  dealing_officer_at TIMESTAMP,
+  finance_officer_id INTEGER REFERENCES users(id),
+  finance_officer_remarks TEXT,
+  finance_officer_at TIMESTAMP,
+  director_id INTEGER REFERENCES users(id),
+  director_remarks TEXT,
+  director_at TIMESTAMP,
   approved_by INTEGER REFERENCES users(id),
   approved_at TIMESTAMP,
+  statutory_order_number VARCHAR(100),
+  noc_document_path TEXT,
+  rejection_reason TEXT,
   remarks TEXT
 );
 
@@ -138,8 +149,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
   changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   old_value TEXT,
   new_value TEXT,
+  user_id INTEGER,
+  institution_id INTEGER,
+  previous_state TEXT,
+  new_state TEXT,
   ip_address VARCHAR(50),
-  notes TEXT
+  notes TEXT,
+  timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS lien_invocations (

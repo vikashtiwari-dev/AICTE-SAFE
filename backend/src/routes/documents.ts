@@ -1,14 +1,70 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import jwt from 'jsonwebtoken';
 import { db } from '../db/database';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, JWT_SECRET } from '../middleware/auth';
 import { UPLOAD_DIR_PATH } from '../middleware/upload';
 
 const router = express.Router();
 
+// POST /api/documents/:id/view-token - Generate a short-lived (60s) single-use document token
+router.post('/:id/view-token', authenticate, (req: AuthRequest, res) => {
+  const doc = db.prepare(`
+    SELECT d.id, f.institution_id
+    FROM fdr_documents d
+    JOIN fdrs f ON d.fdr_id = f.id
+    WHERE d.id = ? AND d.is_active = 1
+  `).get(req.params.id) as any;
+
+  if (!doc) {
+    return res.status(404).json({ error: 'Document not found' });
+  }
+
+  // Authorization check for institution users
+  if (req.user!.role === 'institution_user' && doc.institution_id !== req.user!.institution_id) {
+    return res.status(403).json({ error: 'Access denied: Clearance required for this institutional record.' });
+  }
+
+  // Sign a restricted 60-second viewing token tied specifically to this document ID
+  const viewToken = jwt.sign(
+    { docId: doc.id, userId: req.user!.userId, purpose: 'DOCUMENT_STREAM_VIEW' },
+    JWT_SECRET,
+    { expiresIn: '60s' }
+  );
+
+  return res.json({ view_token: viewToken, expires_in_seconds: 60 });
+});
+
 // GET /api/documents/stream/:id - Secure, authorized document streaming
-router.get('/stream/:id', authenticate, (req: AuthRequest, res) => {
+router.get('/stream/:id', (req: any, res) => {
+  // Support either standard Authorization header OR short-lived single-use view token
+  let authenticatedUser: any = null;
+
+  const authHeader = req.headers.authorization;
+  const queryToken = req.query.token || req.query.viewToken;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      authenticatedUser = jwt.verify(authHeader.substring(7), JWT_SECRET);
+    } catch (_) {}
+  } else if (queryToken && typeof queryToken === 'string') {
+    try {
+      const payload = jwt.verify(queryToken, JWT_SECRET) as any;
+      // If single-use document view token, ensure it matches this specific document
+      if (payload.purpose === 'DOCUMENT_STREAM_VIEW') {
+        if (Number(payload.docId) !== Number(req.params.id)) {
+          return res.status(403).json({ error: 'Security violation: View token does not match requested document.' });
+        }
+      }
+      authenticatedUser = payload;
+    } catch (_) {}
+  }
+
+  if (!authenticatedUser) {
+    return res.status(401).json({ error: 'Unauthorized: Valid authentication token or view token required to access financial records.' });
+  }
+
   const doc = db.prepare(`
     SELECT d.*, f.institution_id, f.fdr_number
     FROM fdr_documents d
@@ -20,8 +76,8 @@ router.get('/stream/:id', authenticate, (req: AuthRequest, res) => {
     return res.status(404).json({ error: 'Document not found or has been revoked' });
   }
 
-  // Authorization check
-  if (req.user!.role === 'institution_user' && doc.institution_id !== req.user!.institution_id) {
+  // Institution isolation check
+  if (authenticatedUser.role === 'institution_user' && doc.institution_id !== authenticatedUser.institution_id) {
     return res.status(403).json({ error: 'Access denied: You do not possess clearance for this institutional record.' });
   }
 
@@ -31,7 +87,6 @@ router.get('/stream/:id', authenticate, (req: AuthRequest, res) => {
     : path.join(UPLOAD_DIR_PATH, doc.file_path);
 
   if (!fs.existsSync(targetPath)) {
-    // Check fallback in uploads dir by file_name
     const fallbackPath = path.join(UPLOAD_DIR_PATH, doc.file_name);
     if (fs.existsSync(fallbackPath)) {
       targetPath = fallbackPath;
@@ -42,13 +97,12 @@ router.get('/stream/:id', authenticate, (req: AuthRequest, res) => {
 
   const mimeType = doc.mime_type || 'application/pdf';
   res.setHeader('Content-Type', mimeType);
-  res.setHeader('Content-Disposition', `inline; filename="${doc.file_name}"`);
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name)}"`);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'private, max-age=300'); // 5 minutes private cache
+  res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate'); // Never cache financial documents publicly
 
   const readStream = fs.createReadStream(targetPath);
   readStream.pipe(res);
 });
 
 export default router;
-

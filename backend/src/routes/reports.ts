@@ -4,12 +4,15 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 
 const router = express.Router();
 
-// GET /api/reports/summary - top-level dashboard metrics
+// GET /api/reports/summary - top-level dashboard metrics with fail-closed institution isolation
 router.get('/summary', authenticate, (req: AuthRequest, res) => {
   let instFilter = '';
   const params: any[] = [];
 
-  if (req.user!.role === 'institution_user' && req.user!.institution_id) {
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: User is not linked to any registered institution.' });
+    }
     instFilter = 'WHERE institution_id = ?';
     params.push(req.user!.institution_id);
   }
@@ -32,16 +35,16 @@ router.get('/summary', authenticate, (req: AuthRequest, res) => {
   // Unresolved alerts count
   let alertFilter = 'WHERE is_resolved = 0';
   const alertParams: any[] = [];
-  if (req.user!.role === 'institution_user' && req.user!.institution_id) {
+  if (req.user!.role === 'institution_user') {
     alertFilter += ' AND institution_id = ?';
     alertParams.push(req.user!.institution_id);
   }
   const pendingAlerts = db.prepare(`SELECT COUNT(*) as cnt FROM alerts ${alertFilter}`).get(...alertParams) as any;
 
   // Pending release requests count
-  let relFilter = "WHERE status IN ('Pending', 'Under Review')";
+  let relFilter = "WHERE status IN ('Pending', 'Under Review', 'Submitted')";
   const relParams: any[] = [];
-  if (req.user!.role === 'institution_user' && req.user!.institution_id) {
+  if (req.user!.role === 'institution_user') {
     relFilter += ' AND institution_id = ?';
     relParams.push(req.user!.institution_id);
   }
@@ -49,8 +52,8 @@ router.get('/summary', authenticate, (req: AuthRequest, res) => {
 
   return res.json({
     ...totals,
-    unresolved_alerts_count: pendingAlerts.cnt,
-    pending_releases_count: pendingReleases.cnt,
+    unresolved_alerts_count: pendingAlerts.cnt || 0,
+    pending_releases_count: pendingReleases.cnt || 0,
   });
 });
 
@@ -58,7 +61,10 @@ router.get('/summary', authenticate, (req: AuthRequest, res) => {
 router.get('/status-breakdown', authenticate, (req: AuthRequest, res) => {
   let instFilter = '';
   const params: any[] = [];
-  if (req.user!.role === 'institution_user' && req.user!.institution_id) {
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: User is not linked to any registered institution.' });
+    }
     instFilter = 'WHERE institution_id = ?';
     params.push(req.user!.institution_id);
   }
@@ -84,7 +90,10 @@ router.get('/status-breakdown', authenticate, (req: AuthRequest, res) => {
 router.get('/expiring', authenticate, (req: AuthRequest, res) => {
   let instFilter = '';
   const params: any[] = [];
-  if (req.user!.role === 'institution_user' && req.user!.institution_id) {
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: User is not linked to any registered institution.' });
+    }
     instFilter = 'AND f.institution_id = ?';
     params.push(req.user!.institution_id);
   }
@@ -105,7 +114,18 @@ router.get('/expiring', authenticate, (req: AuthRequest, res) => {
 });
 
 // GET /api/reports/institution-wise
-router.get('/institution-wise', authenticate, (_req: AuthRequest, res) => {
+router.get('/institution-wise', authenticate, (req: AuthRequest, res) => {
+  let whereClause = '';
+  const params: any[] = [];
+
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: User is not linked to any registered institution.' });
+    }
+    whereClause = 'WHERE i.id = ?';
+    params.push(req.user!.institution_id);
+  }
+
   const data = db.prepare(`
     SELECT 
       i.id, i.aicte_id, i.name, i.state, i.institution_type,
@@ -117,9 +137,10 @@ router.get('/institution-wise', authenticate, (_req: AuthRequest, res) => {
       SUM(CASE WHEN f.verification_status = 'Discrepancy' THEN 1 ELSE 0 END) as discrepancy_count
     FROM institutions i
     LEFT JOIN fdrs f ON i.id = f.institution_id
+    ${whereClause}
     GROUP BY i.id
     ORDER BY total_deposit_amount DESC
-  `).all() as any[];
+  `).all(...params) as any[];
 
   return res.json(data);
 });
@@ -131,6 +152,14 @@ router.get('/audit-log', authenticate, (req: AuthRequest, res) => {
   let whereClause = 'WHERE 1=1';
   const params: any[] = [];
 
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: User is not linked to any registered institution.' });
+    }
+    whereClause += ' AND a.institution_id = ?';
+    params.push(req.user!.institution_id);
+  }
+
   if (entity_type) {
     whereClause += ' AND a.entity_type = ?';
     params.push(entity_type);
@@ -139,9 +168,9 @@ router.get('/audit-log', authenticate, (req: AuthRequest, res) => {
   const logs = db.prepare(`
     SELECT a.*, u.full_name as changed_by_name, u.role as changed_by_role
     FROM audit_log a
-    LEFT JOIN users u ON a.changed_by = u.id
+    LEFT JOIN users u ON a.user_id = u.id
     ${whereClause}
-    ORDER BY a.changed_at DESC
+    ORDER BY a.timestamp DESC
     LIMIT ?
   `).all(...params, parseInt(limit as string)) as any[];
 
@@ -149,38 +178,40 @@ router.get('/audit-log', authenticate, (req: AuthRequest, res) => {
 });
 
 // GET /api/reports/macro-analytics - Macro-level Cash Flow & Bank Distribution
-router.get('/macro-analytics', authenticate, (_req: AuthRequest, res) => {
-  // Bank concentration breakdown
+router.get('/macro-analytics', authenticate, (req: AuthRequest, res) => {
+  let instFilter = '';
+  const params: any[] = [];
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: User is not linked to any registered institution.' });
+    }
+    instFilter = 'WHERE institution_id = ?';
+    params.push(req.user!.institution_id);
+  }
+
   const bankDistribution = db.prepare(`
     SELECT bank_name, 
       COUNT(*) as count, 
       COALESCE(SUM(deposit_amount), 0) as total_amount
     FROM fdrs
     WHERE status NOT IN ('Cancelled', 'Released')
+    ${instFilter ? 'AND ' + instFilter.replace('WHERE ', '') : ''}
     GROUP BY bank_name
     ORDER BY total_amount DESC
-  `).all();
-
-  // Quarterly release forecast (Q1 to Q4)
-  const quarterlyForecast = [
-    { quarter: 'Q1 (Apr-Jun)', projected_releases: 4, projected_amount: 18500000, risk_level: 'Low' },
-    { quarter: 'Q2 (Jul-Sep)', projected_releases: 7, projected_amount: 32000000, risk_level: 'Medium' },
-    { quarter: 'Q3 (Oct-Dec)', projected_releases: 12, projected_amount: 58000000, risk_level: 'High' },
-    { quarter: 'Q4 (Jan-Mar)', projected_releases: 9, projected_amount: 45000000, risk_level: 'Medium' }
-  ];
+  `).all(...params);
 
   // Total locked-in capital
   const totalLocked = db.prepare(`
     SELECT COALESCE(SUM(deposit_amount), 0) as locked_capital, COUNT(*) as active_instruments
     FROM fdrs
     WHERE status IN ('Active', 'Expiring Soon')
-  `).get() as any;
+    ${instFilter ? 'AND ' + instFilter.replace('WHERE ', '') : ''}
+  `).get(...params) as any;
 
   return res.json({
     bankDistribution,
-    quarterlyForecast,
-    totalLockedCapital: totalLocked.locked_capital,
-    activeInstruments: totalLocked.active_instruments,
+    totalLockedCapital: totalLocked ? totalLocked.locked_capital : 0,
+    activeInstruments: totalLocked ? totalLocked.active_instruments : 0,
   });
 });
 
@@ -190,10 +221,15 @@ router.get('/compliance-health/:id', authenticate, (req: AuthRequest, res) => {
   if (targetId === 'current' || targetId === 'me' || !targetId) {
     targetId = (req.user?.institution_id || 1).toString();
   }
-  let inst = db.prepare('SELECT * FROM institutions WHERE id = ?').get(targetId) as any;
-  if (!inst) {
-    inst = db.prepare('SELECT * FROM institutions LIMIT 1').get() as any;
+
+  // Institution isolation
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id || Number(targetId) !== Number(req.user!.institution_id)) {
+      return res.status(403).json({ error: 'Access denied: You can only check compliance health for your registered institution.' });
+    }
   }
+
+  const inst = db.prepare('SELECT * FROM institutions WHERE id = ?').get(targetId) as any;
   if (!inst) return res.status(404).json({ error: 'Institution not found' });
   const instId = inst.id;
 

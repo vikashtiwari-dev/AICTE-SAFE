@@ -1,21 +1,25 @@
 import express from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
-import { db } from '../db/database';
+import { db, executeMutation } from '../db/database';
 import { authenticate, requireRole, AuthRequest, maskAccountNumber } from '../middleware/auth';
 import { upload, validateFileMagic } from '../middleware/upload';
 import { lookupIFSC, verifyNeSLeBG, validateSFMS_IFN760 } from '../services/bankingService';
 import { extractFDRFromDocument } from '../services/ocrService';
 import { calculateRequiredDeposit, validateLockInEligibility } from '../services/aphService';
-import path from 'path';
 
 const router = express.Router();
 
-// POST /api/fdrs/ocr-extract - Real AI / OCR entity extraction & discrepancy detection
+// POST /api/fdrs/ocr-extract - Honest AI / OCR entity extraction with mathematical confidence
 router.post('/ocr-extract', authenticate, upload.single('file'), async (req: AuthRequest, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG)' });
+      return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG, DOCX)' });
+    }
+
+    if (!validateFileMagic(req.file.path)) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(400).json({ error: 'Security rejection: Uploaded file signature does not match authentic document formats.' });
     }
 
     const submittedData = {
@@ -30,7 +34,7 @@ router.post('/ocr-extract', authenticate, upload.single('file'), async (req: Aut
   }
 });
 
-// GET /api/fdrs/validate-ifsc/:ifsc - Comprehensive RBI Directory IFSC validation
+// GET /api/fdrs/validate-ifsc/:ifsc - Authoritative RBI Scheduled Bank validation
 router.get('/validate-ifsc/:ifsc', (req, res) => {
   const result = lookupIFSC(req.params.ifsc);
   if (!result.valid) {
@@ -43,29 +47,35 @@ router.get('/validate-ifsc/:ifsc', (req, res) => {
 router.post('/verify-nesl', authenticate, (req: AuthRequest, res) => {
   const { nesl_identifier, deposit_amount, bank_name } = req.body;
   if (!nesl_identifier) {
-    return res.status(400).json({ error: 'NeSL e-BG Identifier is required' });
+    return res.status(400).json({ error: 'NeSL Identifier reference is required (e.g. NESL-2024-BG-889912)' });
   }
-  const result = verifyNeSLeBG(nesl_identifier, deposit_amount || 5000000, bank_name || 'State Bank of India');
+  const result = verifyNeSLeBG(nesl_identifier, parseFloat(deposit_amount) || 0, bank_name || 'Scheduled Commercial Bank');
   return res.json(result);
 });
 
-// POST /api/fdrs/verify-sfms - Structured Financial Messaging (SFMS IFN 760) Verification
+// POST /api/fdrs/verify-sfms - SFMS IFN 760 Structured Financial Message Verification
 router.post('/verify-sfms', authenticate, (req: AuthRequest, res) => {
   const { sfms_message } = req.body;
   if (!sfms_message) {
-    return res.status(400).json({ error: 'SFMS message payload is required' });
+    return res.status(400).json({ error: 'SFMS Raw Message block is required for parsing' });
   }
   const result = validateSFMS_IFN760(sfms_message);
   return res.json(result);
 });
 
-// POST /api/fdrs/aph-calculate - Approval Process Handbook (APH) Statutory Deposit Calculator
-router.post('/aph-calculate', (req, res) => {
-  const result = calculateRequiredDeposit(req.body);
+// POST /api/fdrs/aph-calculate - Statutory APH Security Deposit Calculator
+router.post('/aph-calculate', authenticate, (req: AuthRequest, res) => {
+  const { programme_key, institution_type, minority_status, is_women_only, is_remote_region } = req.body;
+  const result = calculateRequiredDeposit({
+    programme_key: programme_key || institution_type || 'Engineering_UG',
+    is_minority_institution: Boolean(minority_status),
+    is_women_institution: Boolean(is_women_only),
+    is_special_region: Boolean(is_remote_region)
+  });
   return res.json(result);
 });
 
-// GET /api/fdrs - list with filters
+// GET /api/fdrs - List with strict institution isolation
 router.get('/', authenticate, (req: AuthRequest, res) => {
   const { status, verification_status, institution_id, search, page = '1', limit = '20', deposit_type } = req.query;
   const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -73,8 +83,11 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
   let whereClause = 'WHERE 1=1';
   const params: any[] = [];
 
-  // Institution users can only see their own institution's FDRs
-  if (req.user!.role === 'institution_user' && req.user!.institution_id) {
+  // Strict Fail-Closed Institution Isolation
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: Institution user account is not associated with any registered institution.' });
+    }
     whereClause += ' AND f.institution_id = ?';
     params.push(req.user!.institution_id);
   } else if (institution_id) {
@@ -125,7 +138,7 @@ router.get('/', authenticate, (req: AuthRequest, res) => {
   });
 });
 
-// GET /api/fdrs/:id - single FDR
+// GET /api/fdrs/:id - Single FDR with authorization check
 router.get('/:id', authenticate, (req: AuthRequest, res) => {
   const fdr = db.prepare(`
     SELECT f.*, i.name as institution_name, i.aicte_id, i.contact_person, i.contact_email,
@@ -141,9 +154,9 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
 
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
-  // Role check for institution users
+  // Strict ownership check for institution users
   if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
-    return res.status(403).json({ error: 'Forbidden' });
+    return res.status(403).json({ error: 'Forbidden: You do not possess clearance for this institutional instrument.' });
   }
 
   // Calculate APH Lock-in eligibility
@@ -152,9 +165,9 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
   const documents = db.prepare('SELECT * FROM fdr_documents WHERE fdr_id = ? AND is_active = 1 ORDER BY uploaded_at DESC').all(fdr.id) as any[];
   const audit = db.prepare(`
     SELECT a.*, u.full_name as changed_by_name 
-    FROM audit_log a LEFT JOIN users u ON a.changed_by = u.id
+    FROM audit_log a LEFT JOIN users u ON a.user_id = u.id
     WHERE a.entity_type = 'FDR' AND a.entity_id = ?
-    ORDER BY a.changed_at DESC
+    ORDER BY a.timestamp DESC
   `).all(fdr.id) as any[];
 
   // Sensitive account masking
@@ -170,116 +183,195 @@ router.get('/:id', authenticate, (req: AuthRequest, res) => {
   return res.json(safeFdr);
 });
 
-// POST /api/fdrs - create
-router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), (req: AuthRequest, res) => {
+// POST /api/fdrs - Create with strict institution ownership enforcement and durable cloud write
+router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), async (req: AuthRequest, res) => {
   const { institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount, issue_date, maturity_date, interest_rate, deposit_type, purpose, remarks, is_renewal, parent_fdr_id } = req.body;
 
-  if (!institution_id || !fdr_number || !bank_name || !deposit_amount || !issue_date || !maturity_date) {
-    return res.status(400).json({ error: 'Required fields missing' });
+  if (!fdr_number || !bank_name || !deposit_amount || !issue_date || !maturity_date) {
+    return res.status(400).json({ error: 'Required fields missing (FDR Number, Bank Name, Deposit Amount, Issue Date, Maturity Date)' });
+  }
+
+  // Strictly enforce institution ownership: an institution_user CANNOT create FDRs for other institutions
+  let targetInstitutionId = institution_id;
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Forbidden: Your user account is not linked to any registered institution.' });
+    }
+    targetInstitutionId = req.user!.institution_id;
+  }
+
+  if (!targetInstitutionId) {
+    return res.status(400).json({ error: 'Institution ID is required' });
+  }
+
+  // Verify institution exists
+  const instExists = db.prepare('SELECT id FROM institutions WHERE id = ?').get(targetInstitutionId);
+  if (!instExists) {
+    return res.status(400).json({ error: 'Specified institution does not exist in registry' });
   }
 
   try {
-    const result = db.prepare(`
+    const result = await executeMutation(`
       INSERT INTO fdrs (institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount,
         issue_date, maturity_date, interest_rate, deposit_type, purpose, remarks, is_renewal, parent_fdr_id,
         submitted_by, last_updated_by, status, verification_status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Verification', 'Unverified')
-    `).run(
-      institution_id, fdr_number, bank_name, bank_branch || null, account_number || null,
-      deposit_amount, issue_date, maturity_date, interest_rate || null,
+    `, [
+      targetInstitutionId, fdr_number.trim().toUpperCase(), bank_name.trim(), bank_branch || null, account_number || null,
+      parseFloat(deposit_amount), issue_date, maturity_date, interest_rate ? parseFloat(interest_rate) : null,
       deposit_type || 'FDR', purpose || null, remarks || null,
       is_renewal ? 1 : 0, parent_fdr_id || null,
       req.user!.userId, req.user!.userId
-    );
+    ]);
 
-    db.prepare(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, notes)
-      VALUES ('FDR', ?, 'Created', ?, ?)
-    `).run(result.lastInsertRowid, req.user!.userId, 'New FDR submitted');
+    await executeMutation(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      VALUES ('FDR', ?, 'Created', ?, ?, ?)
+    `, [result.lastInsertRowid, req.user!.userId, targetInstitutionId, JSON.stringify({ fdr_number, deposit_amount, status: 'Pending Verification' })]);
 
     const newFdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(result.lastInsertRowid);
     return res.status(201).json(newFdr);
   } catch (err: any) {
-    if (err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'FDR number already exists' });
+    if (err.message && err.message.includes('UNIQUE')) {
+      return res.status(409).json({ error: `FDR number "${fdr_number}" already exists in the national database.` });
     }
-    return res.status(500).json({ error: 'Failed to create FDR', details: err.message });
+    return res.status(500).json({ error: 'Failed to create FDR in cloud database', details: err.message });
   }
 });
 
-// PUT /api/fdrs/:id - update
-router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), (req: AuthRequest, res) => {
+// Valid FDR Lifecycle State Transitions
+const VALID_FDR_TRANSITIONS: Record<string, string[]> = {
+  'Pending Verification': ['Active', 'Discrepancy', 'Cancelled'],
+  'Active': ['Expiring Soon', 'Matured', 'Lien Invoked', 'Under Review for Release'],
+  'Expiring Soon': ['Matured', 'Renewed', 'Active'],
+  'Matured': ['Renewed', 'Lien Invoked', 'Under Review for Release'],
+  'Renewed': ['Active', 'Matured'],
+  'Under Review for Release': ['Released', 'Active'],
+  'Lien Invoked': ['Forfeited', 'Active'],
+  'Released': [], // Terminal
+  'Forfeited': [] // Terminal
+};
+
+// PUT /api/fdrs/:id - Update with validated state transitions
+router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
   const { bank_name, bank_branch, account_number, deposit_amount, issue_date, maturity_date, interest_rate, deposit_type, purpose, remarks, status } = req.body;
 
-  const oldValue = JSON.stringify({ status: fdr.status, deposit_amount: fdr.deposit_amount });
+  // Validate state transition if status is being updated
+  const targetStatus = status || fdr.status;
+  if (status && status !== fdr.status) {
+    const allowed = VALID_FDR_TRANSITIONS[fdr.status] || [];
+    if (!allowed.includes(status) && req.user!.role !== 'admin') {
+      return res.status(400).json({
+        error: `Invalid status transition: Cannot change status from "${fdr.status}" to "${status}".`,
+        allowed_transitions: allowed
+      });
+    }
+  }
 
-  db.prepare(`
-    UPDATE fdrs SET bank_name = ?, bank_branch = ?, account_number = ?, deposit_amount = ?,
-      issue_date = ?, maturity_date = ?, interest_rate = ?, deposit_type = ?, purpose = ?,
-      remarks = ?, status = ?, last_updated_by = ?, last_updated_at = datetime('now')
-    WHERE id = ?
-  `).run(
-    bank_name, bank_branch || null, account_number || null, deposit_amount,
-    issue_date, maturity_date, interest_rate || null, deposit_type, purpose || null,
-    remarks || null, status, req.user!.userId, req.params.id
-  );
+  const oldState = JSON.stringify({ status: fdr.status, deposit_amount: fdr.deposit_amount });
 
-  db.prepare(`
-    INSERT INTO audit_log (entity_type, entity_id, action, changed_by, old_value, new_value)
-    VALUES ('FDR', ?, 'Updated', ?, ?, ?)
-  `).run(req.params.id, req.user!.userId, oldValue, JSON.stringify({ status, deposit_amount }));
+  try {
+    await executeMutation(`
+      UPDATE fdrs SET bank_name = ?, bank_branch = ?, account_number = ?, deposit_amount = ?,
+        issue_date = ?, maturity_date = ?, interest_rate = ?, deposit_type = ?, purpose = ?,
+        remarks = ?, status = ?, last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [
+      bank_name || fdr.bank_name, bank_branch || null, account_number || null,
+      deposit_amount ? parseFloat(deposit_amount) : fdr.deposit_amount,
+      issue_date || fdr.issue_date, maturity_date || fdr.maturity_date,
+      interest_rate ? parseFloat(interest_rate) : fdr.interest_rate,
+      deposit_type || fdr.deposit_type, purpose || null,
+      remarks || null, targetStatus, req.user!.userId, req.params.id
+    ]);
 
-  return res.json(db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id));
+    await executeMutation(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, previous_state, new_state)
+      VALUES ('FDR', ?, 'Updated', ?, ?, ?, ?)
+    `, [req.params.id, req.user!.userId, fdr.institution_id, oldState, JSON.stringify({ status: targetStatus, deposit_amount })]);
+
+    return res.json(db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id));
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to update FDR in cloud database', details: err.message });
+  }
 });
 
-// PATCH /api/fdrs/:id/verify
-router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer']), (req: AuthRequest, res) => {
+// PATCH /api/fdrs/:id/verify - Strictly enforce verification policy
+router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const { verification_status, verification_notes } = req.body;
   const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
-  db.prepare(`
-    UPDATE fdrs SET verification_status = ?, verification_notes = ?,
-      verified_by = ?, verified_at = datetime('now'),
-      status = CASE WHEN ? = 'Verified' AND status = 'Pending Verification' THEN 'Active' ELSE status END,
-      last_updated_by = ?, last_updated_at = datetime('now')
-    WHERE id = ?
-  `).run(verification_status, verification_notes || null, req.user!.userId, verification_status, req.user!.userId, req.params.id);
-
-  db.prepare(`
-    INSERT INTO audit_log (entity_type, entity_id, action, changed_by, notes)
-    VALUES ('FDR', ?, ?, ?, ?)
-  `).run(req.params.id, req.user!.userId,
-    verification_status === 'Verified' ? 'Verified' : 'Discrepancy Flagged',
-    verification_notes || `Verification status set to ${verification_status}`);
-
-  // If discrepancy, create alert
-  if (verification_status === 'Discrepancy') {
-    db.prepare(`
-      INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
-      VALUES (?, ?, 'Discrepancy', 'Critical', ?)
-    `).run(fdr.id, fdr.institution_id, `Discrepancy flagged on FDR ${fdr.fdr_number}: ${verification_notes}`);
+  const allowedStatuses = ['Verified', 'Discrepancy', 'Under Scrutiny', 'Unverified'];
+  if (!allowedStatuses.includes(verification_status)) {
+    return res.status(400).json({ error: `Invalid verification status. Must be one of: ${allowedStatuses.join(', ')}` });
   }
 
-  return res.json({ success: true });
+  if (verification_status === 'Discrepancy' && (!verification_notes || verification_notes.trim().length < 5)) {
+    return res.status(400).json({ error: 'Detailed scrutiny notes are required when flagging an instrument discrepancy.' });
+  }
+
+  const newFdrStatus = (verification_status === 'Verified' && fdr.status === 'Pending Verification')
+    ? 'Active'
+    : (verification_status === 'Discrepancy' ? 'Pending Verification' : fdr.status);
+
+  try {
+    await executeMutation(`
+      UPDATE fdrs SET verification_status = ?, verification_notes = ?,
+        verified_by = ?, verified_at = CURRENT_TIMESTAMP,
+        status = ?, last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [verification_status, verification_notes || null, req.user!.userId, newFdrStatus, req.user!.userId, req.params.id]);
+
+    await executeMutation(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, previous_state, new_state)
+      VALUES ('FDR', ?, ?, ?, ?, ?, ?)
+    `, [
+      req.params.id, req.user!.userId, fdr.institution_id,
+      verification_status === 'Verified' ? 'Verification Approved' : 'Discrepancy Flagged',
+      JSON.stringify({ verification_status: fdr.verification_status }),
+      JSON.stringify({ verification_status, notes: verification_notes })
+    ]);
+
+    // If discrepancy flagged, create a high-priority alert
+    if (verification_status === 'Discrepancy') {
+      await executeMutation(`
+        INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
+        VALUES (?, ?, 'Discrepancy', 'Critical', ?)
+      `, [fdr.id, fdr.institution_id, `Scrutiny Discrepancy flagged on FDR ${fdr.fdr_number}: ${verification_notes}`]);
+    }
+
+    return res.json({ success: true, verification_status, fdr_status: newFdrStatus });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Verification update failed', details: err.message });
+  }
 });
 
-// POST /api/fdrs/:id/documents - upload
+// POST /api/fdrs/:id/documents - Upload with strict institution ownership verification
 router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']),
-  upload.single('file'), (req: AuthRequest, res) => {
+  upload.single('file'), async (req: AuthRequest, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    // Enforce strict file magic signature verification to prevent executable/script uploads
+    // Enforce strict file magic signature verification
     if (!validateFileMagic(req.file.path)) {
       try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.status(400).json({ error: 'Security validation failed: File headers do not match legitimate document formats (PDF, JPEG, PNG, DOCX).' });
     }
 
     const fdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
-    if (!fdr) return res.status(404).json({ error: 'FDR not found' });
+    if (!fdr) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(404).json({ error: 'FDR not found' });
+    }
+
+    // Strict institution ownership verification
+    if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(403).json({ error: 'Forbidden: You cannot upload documents to an FDR belonging to another institution.' });
+    }
 
     let sha256Hash = '0x' + crypto.randomBytes(32).toString('hex');
     try {
@@ -287,29 +379,38 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
         const fileBuf = fs.readFileSync(req.file.path);
         sha256Hash = '0x' + crypto.createHash('sha256').update(fileBuf).digest('hex');
       }
-    } catch (e) {
-      // fallback hash
+    } catch (_) {}
+
+    try {
+      const result = await executeMutation(`
+        INSERT INTO fdr_documents (fdr_id, document_type, file_name, file_path, file_size, mime_type, sha256_hash, verified_on_chain, uploaded_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+      `, [
+        fdr.id, req.body.document_type || 'Supporting_Doc',
+        req.file.originalname, req.file.filename,
+        req.file.size, req.file.mimetype, sha256Hash, req.user!.userId
+      ]);
+
+      await executeMutation(`
+        INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+        VALUES ('FDR', ?, 'Document Uploaded', ?, ?, ?)
+      `, [fdr.id, req.user!.userId, fdr.institution_id, JSON.stringify({ document_name: req.file.originalname, sha256: sha256Hash })]);
+
+      return res.status(201).json(db.prepare('SELECT * FROM fdr_documents WHERE id = ?').get(result.lastInsertRowid));
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Failed to record document metadata', details: err.message });
     }
-
-    const result = db.prepare(`
-      INSERT INTO fdr_documents (fdr_id, document_type, file_name, file_path, file_size, mime_type, sha256_hash, verified_on_chain, uploaded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-    `).run(
-      fdr.id, req.body.document_type || 'Supporting_Doc',
-      req.file.originalname, req.file.filename,
-      req.file.size, req.file.mimetype, sha256Hash, req.user!.userId
-    );
-
-    db.prepare(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, notes)
-      VALUES ('FDR', ?, 'Document Uploaded & Cryptographically Hashed', ?, ?)
-    `).run(fdr.id, req.user!.userId, `Document "${req.file.originalname}" anchored with SHA-256 ${sha256Hash.substring(0, 16)}...`);
-
-    return res.status(201).json(db.prepare('SELECT * FROM fdr_documents WHERE id = ?').get(result.lastInsertRowid));
   });
 
-// GET /api/fdrs/:id/documents
+// GET /api/fdrs/:id/documents - List documents with ownership check
 router.get('/:id/documents', authenticate, (req: AuthRequest, res) => {
+  const fdr = db.prepare('SELECT institution_id FROM fdrs WHERE id = ?').get(req.params.id) as any;
+  if (!fdr) return res.status(404).json({ error: 'FDR not found' });
+
+  if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
+    return res.status(403).json({ error: 'Forbidden: Access to documents of other institutions is denied.' });
+  }
+
   const docs = db.prepare(`
     SELECT d.*, u.full_name as uploaded_by_name 
     FROM fdr_documents d LEFT JOIN users u ON d.uploaded_by = u.id
@@ -320,47 +421,66 @@ router.get('/:id/documents', authenticate, (req: AuthRequest, res) => {
 });
 
 // DELETE /api/fdrs/:id/documents/:docId
-router.delete('/:id/documents/:docId', authenticate, requireRole(['admin', 'bureau_officer']), (req: AuthRequest, res) => {
-  db.prepare('UPDATE fdr_documents SET is_active = 0 WHERE id = ? AND fdr_id = ?').run(req.params.docId, req.params.id);
-  db.prepare(`
-    INSERT INTO audit_log (entity_type, entity_id, action, changed_by, notes)
-    VALUES ('FDR', ?, 'Document Deleted', ?, ?)
-  `).run(req.params.id, req.user!.userId, `Document ID ${req.params.docId} removed`);
-  return res.json({ success: true });
-});
-
-// POST /api/fdrs/:id/renew - create renewal
-router.post('/:id/renew', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), (req: AuthRequest, res) => {
-  const parentFdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
-  if (!parentFdr) return res.status(404).json({ error: 'FDR not found' });
-
-  const { fdr_number, bank_name, bank_branch, account_number, deposit_amount, issue_date, maturity_date, interest_rate } = req.body;
+router.delete('/:id/documents/:docId', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
+  const fdr = db.prepare('SELECT institution_id FROM fdrs WHERE id = ?').get(req.params.id) as any;
+  if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
   try {
-    const result = db.prepare(`
+    await executeMutation('UPDATE fdr_documents SET is_active = 0 WHERE id = ? AND fdr_id = ?', [req.params.docId, req.params.id]);
+    await executeMutation(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      VALUES ('FDR', ?, 'Document Revoked', ?, ?, ?)
+    `, [req.params.id, req.user!.userId, fdr.institution_id, JSON.stringify({ revoked_document_id: req.params.docId })]);
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Document deletion failed', details: err.message });
+  }
+});
+
+// POST /api/fdrs/:id/renew - Create renewal with ownership check and parent link
+router.post('/:id/renew', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), async (req: AuthRequest, res) => {
+  const parentFdr = db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
+  if (!parentFdr) return res.status(404).json({ error: 'Parent FDR not found' });
+
+  // Ownership verification
+  if (req.user!.role === 'institution_user' && parentFdr.institution_id !== req.user!.institution_id) {
+    return res.status(403).json({ error: 'Forbidden: You cannot renew an FDR of another institution.' });
+  }
+
+  const { fdr_number, bank_name, bank_branch, account_number, deposit_amount, issue_date, maturity_date, interest_rate } = req.body;
+  if (!fdr_number || !issue_date || !maturity_date) {
+    return res.status(400).json({ error: 'Required fields: Renewal FDR Number, Issue Date, Maturity Date' });
+  }
+
+  try {
+    const result = await executeMutation(`
       INSERT INTO fdrs (institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount,
         issue_date, maturity_date, interest_rate, deposit_type, purpose,
         submitted_by, last_updated_by, status, verification_status, is_renewal, parent_fdr_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Verification', 'Unverified', 1, ?)
-    `).run(
-      parentFdr.institution_id, fdr_number, bank_name, bank_branch || null, account_number || null,
-      deposit_amount || parentFdr.deposit_amount, issue_date, maturity_date,
-      interest_rate || parentFdr.interest_rate, parentFdr.deposit_type,
-      `Renewal of ${parentFdr.fdr_number}`,
+    `, [
+      parentFdr.institution_id, fdr_number.trim().toUpperCase(), bank_name || parentFdr.bank_name,
+      bank_branch || parentFdr.bank_branch, account_number || parentFdr.account_number,
+      deposit_amount ? parseFloat(deposit_amount) : parentFdr.deposit_amount, issue_date, maturity_date,
+      interest_rate ? parseFloat(interest_rate) : parentFdr.interest_rate, parentFdr.deposit_type,
+      `Renewal of parent instrument ${parentFdr.fdr_number}`,
       req.user!.userId, req.user!.userId, parentFdr.id
-    );
+    ]);
 
-    // Update parent status
-    db.prepare("UPDATE fdrs SET status = 'Renewed', last_updated_by = ? WHERE id = ?").run(req.user!.userId, parentFdr.id);
+    // Update parent status to Renewed
+    await executeMutation("UPDATE fdrs SET status = 'Renewed', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, parentFdr.id]);
 
-    db.prepare(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, notes)
-      VALUES ('FDR', ?, 'Renewal Created', ?, ?)
-    `).run(result.lastInsertRowid, req.user!.userId, `Renewal of FDR ${parentFdr.fdr_number}`);
+    await executeMutation(`
+      INSERT INTO audit_log (entity_type, entity_id, action, user_id, institution_id, new_state)
+      VALUES ('FDR', ?, 'Renewal Created', ?, ?, ?)
+    `, [result.lastInsertRowid, req.user!.userId, parentFdr.institution_id, JSON.stringify({ parent_fdr_id: parentFdr.id, renewal_fdr_number: fdr_number })]);
 
     return res.status(201).json(db.prepare('SELECT * FROM fdrs WHERE id = ?').get(result.lastInsertRowid));
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to create renewal', details: err.message });
+    if (err.message && err.message.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'Renewal FDR number already exists' });
+    }
+    return res.status(500).json({ error: 'Failed to create renewal in cloud database', details: err.message });
   }
 });
 

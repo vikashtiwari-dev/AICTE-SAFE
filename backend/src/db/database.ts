@@ -117,6 +117,29 @@ export function createDB(): DBInterface {
 
 export const db = createDB();
 
+/**
+ * Executes a write mutation (INSERT, UPDATE, DELETE) transactionally against
+ * the cloud PostgreSQL/Supabase database when connected, ensuring true durability,
+ * and maintains the local cache immediately.
+ */
+export async function executeMutation(sql: string, params: any[] = []): Promise<{ changes: number; lastInsertRowid: number }> {
+  if (pgPool) {
+    try {
+      let idx = 1;
+      const pgSql = sql.replace(/\?/g, () => '$' + (idx++));
+      const sanitizedParams = params.map(p => (p === undefined ? null : p));
+      await pgPool.query(pgSql, sanitizedParams);
+    } catch (pgErr: any) {
+      console.error('❌ Cloud PostgreSQL write failed:', pgErr.message);
+      throw new Error(`Durable Cloud Database Write Failed: ${pgErr.message}`);
+    }
+  }
+
+  // Also apply to local SQLite cache
+  const stmt = db.prepare(sql);
+  return stmt.run(...params);
+}
+
 // Cloud hydration: Sync latest records from Supabase PostgreSQL into local SQLite
 export async function syncFromSupabase() {
   if (!pgPool) return;

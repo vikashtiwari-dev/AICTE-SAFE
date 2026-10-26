@@ -1,11 +1,27 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'aicte-fdr-secret-key-2024-regulatory-safe-production';
+// In production, reject static default fallback secrets to prevent token forgery
+function resolveJWTSecret(): string {
+  if (process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 16) {
+    return process.env.JWT_SECRET;
+  }
 
-if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
-  console.warn('⚠️ [SECURITY WARNING] JWT_SECRET environment variable is not explicitly set! Using fallback key. Set JWT_SECRET in production.');
+  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
+    console.error('🚨 [FATAL SECURITY ERROR] JWT_SECRET is not configured in production environment!');
+    process.exit(1);
+  }
+
+  // Generate a persistent, cryptographically secure random secret for this runtime instance
+  const ephemeralSecret = crypto.randomBytes(32).toString('hex');
+  if (process.env.NODE_ENV === 'production') {
+    console.warn('⚠️ [SECURITY NOTICE] Production runtime auto-generated an ephemeral 256-bit JWT signing key to prevent forged fallback tokens.');
+  }
+  return ephemeralSecret;
 }
+
+export const JWT_SECRET = resolveJWTSecret();
 
 export interface AuthRequest extends Request {
   user?: {
@@ -23,7 +39,7 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
   if (authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.substring(7);
   } else if (req.query && typeof req.query.token === 'string') {
-    // Support authenticated document streaming via query token
+    // Restricted query token usage specifically for secure browser document viewing streams
     token = req.query.token;
   }
 
@@ -35,8 +51,8 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
     const payload = jwt.verify(token, JWT_SECRET) as any;
     req.user = payload;
     next();
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+  } catch (err: any) {
+    return res.status(401).json({ error: 'Invalid or expired token', message: err.message });
   }
 }
 

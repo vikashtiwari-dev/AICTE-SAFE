@@ -31,9 +31,8 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 // Apply general API rate limiting
 app.use('/api', apiLimiter);
 
-// Serve uploaded documents statically (supporting /tmp on Vercel)
-const uploadsDir = process.env.VERCEL ? path.join('/tmp', 'uploads') : path.join(__dirname, '../uploads');
-app.use('/uploads', express.static(uploadsDir));
+// PRIVATE DOCUMENT STORAGE: All document access must traverse authenticated streaming route /api/documents/stream/:id
+// Public static access to /uploads is disabled to protect confidential financial records.
 
 // Initialize DB schema
 initializeDatabase();

@@ -16,51 +16,64 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
+    const ext = path.extname(file.originalname).toLowerCase();
     cb(null, `${uniqueSuffix}${ext}`);
   },
 });
 
 const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.doc', '.docx'];
+  const allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.docx'];
   const ext = path.extname(file.originalname).toLowerCase();
   if (allowed.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error('File type not allowed. Accepted: PDF, JPG, PNG, DOC, DOCX'));
+    cb(new Error('File type rejected. Only secure document formats are permitted: PDF, JPG, PNG, DOCX.'));
   }
 };
 
 export const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB maximum
 });
 
 /**
- * Validates file magic header bytes to ensure uploaded file isn't an executable or malicious script
- * masquerading as a PDF or image.
+ * Validates file magic header bytes to ensure uploaded file is not an executable,
+ * script, or malicious binary masquerading with a legitimate extension.
+ * Fails closed on any error or unrecognized header.
  */
 export function validateFileMagic(filePath: string): boolean {
   try {
     if (!fs.existsSync(filePath)) return false;
+    const stat = fs.statSync(filePath);
+    if (stat.size < 4) return false;
+
     const fd = fs.openSync(filePath, 'r');
-    const buffer = Buffer.alloc(8);
-    fs.readSync(fd, buffer, 0, 8, 0);
+    const buffer = Buffer.alloc(16);
+    fs.readSync(fd, buffer, 0, 16, 0);
     fs.closeSync(fd);
 
-    // PDF signature: %PDF
+    // PDF signature: %PDF (hex 25 50 44 46)
     if (buffer.subarray(0, 4).toString('ascii') === '%PDF') return true;
+
     // JPEG signature: FF D8 FF
     if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return true;
+
     // PNG signature: 89 50 4E 47 0D 0A 1A 0A
-    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return true;
-    // Office XML / ZIP (DOCX): PK
-    if (buffer[0] === 0x50 && buffer[1] === 0x4B) return true;
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47 &&
+        buffer[4] === 0x0D && buffer[5] === 0x0A && buffer[6] === 0x1A && buffer[7] === 0x0A) return true;
+
+    // Office Open XML / DOCX signature: PK\x03\x04
+    if (buffer[0] === 0x50 && buffer[1] === 0x4B && buffer[2] === 0x03 && buffer[3] === 0x04) return true;
+
+    // Legacy OLE2 Composite (DOC): D0 CF 11 E0 A1 B1 1A E1
+    if (buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0) return true;
 
     return false;
-  } catch {
-    return true; // Graceful fallback
+  } catch (err) {
+    // Fail closed: reject file if header cannot be verified
+    console.warn('File magic verification exception:', err);
+    return false;
   }
 }
 

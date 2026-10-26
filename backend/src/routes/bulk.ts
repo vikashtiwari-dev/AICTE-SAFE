@@ -1,7 +1,7 @@
 import express from 'express';
-import { db } from '../db/database';
+import { db, executeMutation } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { upload } from '../middleware/upload';
+import { upload, validateFileMagic } from '../middleware/upload';
 import fs from 'fs';
 
 const router = express.Router();
@@ -32,8 +32,8 @@ router.get('/history', authenticate, requireRole(['admin', 'bureau_officer']), (
   return res.json(jobs);
 });
 
-// POST /api/bulk/upload - Process CSV batch ingestion
-router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), upload.single('file'), (req: AuthRequest, res) => {
+// POST /api/bulk/upload - Process CSV batch ingestion with cloud persistence
+router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), upload.single('file'), async (req: AuthRequest, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Please upload a CSV file' });
   }
@@ -74,7 +74,6 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
   let successCount = 0;
   const errors: Array<{ row: number; fdr_number?: string; error: string }> = [];
 
-  // Parse helper supporting quotes
   function parseCSVLine(line: string): string[] {
     const result: string[] = [];
     let cur = '';
@@ -101,7 +100,7 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
 
     const aicteId = (parts[aicteIdIdx] || '').trim();
     const instName = instNameIdx !== -1 ? (parts[instNameIdx] || '').trim() : '';
-    const fdrNumber = (parts[fdrNumIdx] || '').trim();
+    const fdrNumber = (parts[fdrNumIdx] || '').trim().toUpperCase();
     const bankName = (parts[bankNameIdx] || '').trim();
     const bankBranch = branchIdx !== -1 ? (parts[branchIdx] || '').trim() : '';
     const accNumber = accNumIdx !== -1 ? (parts[accNumIdx] || '').trim() : '';
@@ -114,26 +113,29 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
     const purpose = purposeIdx !== -1 ? parts[purposeIdx] : 'Bulk Ingested APH Deposit';
 
     if (!aicteId || !fdrNumber || !bankName || isNaN(depositAmount) || !issueDate || !maturityDate) {
-      errors.push({ row: rowNum, fdr_number: fdrNumber, error: 'Missing mandatory values (AICTE ID, FDR Number, Bank Name, Deposit Amount, Issue Date, Maturity Date)' });
+      errors.push({ row: rowNum, fdr_number: fdrNumber, error: 'Missing mandatory values' });
       continue;
     }
 
-    // Find or create institution
     let institution = db.prepare('SELECT id FROM institutions WHERE aicte_id = ?').get(aicteId) as any;
     if (!institution) {
       if (instName) {
-        const createInst = db.prepare(`
-          INSERT INTO institutions (aicte_id, name, institution_type, contact_email)
-          VALUES (?, ?, 'Technical', ?)
-        `).run(aicteId, instName, `registrar@${aicteId.toLowerCase().replace(/[^a-z0-9]/g, '')}.edu.in`);
-        institution = { id: createInst.lastInsertRowid };
+        try {
+          const createInst = await executeMutation(`
+            INSERT INTO institutions (aicte_id, name, institution_type, contact_email)
+            VALUES (?, ?, 'Technical', ?)
+          `, [aicteId, instName, `registrar@${aicteId.toLowerCase().replace(/[^a-z0-9]/g, '')}.edu.in`]);
+          institution = { id: createInst.lastInsertRowid };
+        } catch (_) {
+          errors.push({ row: rowNum, fdr_number: fdrNumber, error: `Could not register institution ${aicteId}` });
+          continue;
+        }
       } else {
         errors.push({ row: rowNum, fdr_number: fdrNumber, error: `Institution with AICTE ID "${aicteId}" not found in database.` });
         continue;
       }
     }
 
-    // Check duplicate FDR number
     const dup = db.prepare('SELECT id FROM fdrs WHERE fdr_number = ?').get(fdrNumber);
     if (dup) {
       errors.push({ row: rowNum, fdr_number: fdrNumber, error: `FDR Number "${fdrNumber}" already exists in the portal records.` });
@@ -141,29 +143,28 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
     }
 
     try {
-      db.prepare(`
+      await executeMutation(`
         INSERT INTO fdrs (
           institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount,
           issue_date, maturity_date, interest_rate, deposit_type, purpose,
           submitted_by, last_updated_by, status, verification_status
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Active', 'Unverified')
-      `).run(
+      `, [
         institution.id, fdrNumber, bankName, bankBranch || null, accNumber || null,
         depositAmount, issueDate, maturityDate, interestRate, depositType, purpose,
         req.user!.userId, req.user!.userId
-      );
+      ]);
       successCount++;
     } catch (insertErr: any) {
       errors.push({ row: rowNum, fdr_number: fdrNumber, error: insertErr.message });
     }
   }
 
-  // Record batch job
   const summaryLog = `Ingested ${successCount} records successfully. Encountered ${errors.length} row exceptions.`;
-  db.prepare(`
-    INSERT INTO bulk_ingestion_jobs (file_name, total_rows, success_count, error_count, summary_log, uploaded_by)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(req.file.originalname, lines.length - 1, successCount, errors.length, summaryLog, req.user!.userId);
+  await executeMutation(`
+    INSERT INTO bulk_ingestion_jobs (batch_reference, total_rows, successful_rows, failed_rows, validation_errors, uploaded_by, status)
+    VALUES (?, ?, ?, ?, ?, ?, 'COMPLETED')
+  `, [`BATCH-${Date.now()}`, lines.length - 1, successCount, errors.length, JSON.stringify(errors.slice(0, 20)), req.user!.userId]);
 
   return res.json({
     success: true,
@@ -176,4 +177,3 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
 });
 
 export default router;
-

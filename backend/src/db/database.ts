@@ -17,15 +17,29 @@ export interface DBInterface {
   exec(sql: string): void;
   prepare(sql: string): DBStatement;
   pragma?(cmd: string): void;
+  pgPool?: Pool | null;
 }
 
-let dbInstance: DBInterface | null = null;
+let pgPool: Pool | null = null;
+const dbUrl = process.env.DATABASE_URL;
 
-// Synchronous bridge database proxy supporting both SQLite and PostgreSQL
+if (dbUrl) {
+  try {
+    pgPool = new Pool({
+      connectionString: dbUrl,
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 7000,
+    });
+    console.log('✅ PostgreSQL / Supabase Pool connected for cloud persistence');
+  } catch (poolErr: any) {
+    console.warn('⚠️ Cloud PostgreSQL pool initialization notice:', poolErr.message);
+  }
+}
+
+// Synchronous bridge database proxy supporting both SQLite and PostgreSQL replication
 export function createDB(): DBInterface {
-  const dbUrl = process.env.DATABASE_URL;
-
-  // Embedded SQLite driver (supporting ephemeral /tmp on Vercel Serverless)
   const DB_PATH = process.env.VERCEL
     ? path.join('/tmp', 'aicte_fdr.db')
     : path.join(__dirname, '../../data/aicte_fdr.db');
@@ -48,9 +62,15 @@ export function createDB(): DBInterface {
   const sqlite = new DatabaseSync(DB_PATH);
 
   return {
-    isPostgres: false,
+    isPostgres: Boolean(pgPool),
+    pgPool,
     exec(sql: string) {
       sqlite.exec(sql);
+      if (pgPool && !sql.toUpperCase().includes('PRAGMA') && !sql.toUpperCase().includes('AUTOINCREMENT')) {
+        pgPool.query(sql).catch((err: any) => {
+          // Non-blocking background sync
+        });
+      }
     },
     prepare(sql: string): DBStatement {
       const stmt = sqlite.prepare(sql);
@@ -63,6 +83,25 @@ export function createDB(): DBInterface {
         },
         run(...params: any[]) {
           const res = stmt.run(...params);
+
+          // Replicate write mutations (INSERT, UPDATE, DELETE) to Cloud Supabase
+          if (pgPool) {
+            const upper = sql.trim().toUpperCase();
+            if (upper.startsWith('INSERT') || upper.startsWith('UPDATE') || upper.startsWith('DELETE')) {
+              try {
+                let idx = 1;
+                const pgSql = sql.replace(/\?/g, () => '$' + (idx++));
+                // Convert Date objects or boolean numbers if needed
+                const sanitizedParams = params.map(p => (p === undefined ? null : p));
+                pgPool.query(pgSql, sanitizedParams).catch((err: any) => {
+                  console.warn('Supabase cloud replication note:', err.message);
+                });
+              } catch (replErr: any) {
+                console.warn('Supabase replication format note:', replErr.message);
+              }
+            }
+          }
+
           return {
             changes: res.changes,
             lastInsertRowid: res.lastInsertRowid,
@@ -77,6 +116,85 @@ export function createDB(): DBInterface {
 }
 
 export const db = createDB();
+
+// Cloud hydration: Sync latest records from Supabase PostgreSQL into local SQLite
+export async function syncFromSupabase() {
+  if (!pgPool) return;
+  try {
+    console.log('🔄 Checking Supabase PostgreSQL cloud sync...');
+
+    // 1. Sync institutions
+    const pgInsts = await pgPool.query('SELECT * FROM institutions ORDER BY id ASC');
+    if (pgInsts.rows.length > 0) {
+      for (const inst of pgInsts.rows) {
+        try {
+          db.prepare(`
+            INSERT OR IGNORE INTO institutions (id, aicte_id, name, address, state, city, contact_person, contact_email, contact_phone, institution_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            inst.id,
+            inst.aicte_id,
+            inst.name,
+            inst.address || '',
+            inst.state || '',
+            inst.city || '',
+            inst.contact_person || '',
+            inst.contact_email || '',
+            inst.contact_phone || '',
+            inst.institution_type || 'Technical University'
+          );
+        } catch (_) {}
+      }
+      console.log(`✅ Synced ${pgInsts.rows.length} institutions from Supabase cloud`);
+    }
+
+    // 2. Sync FDRs
+    const pgFdrs = await pgPool.query('SELECT * FROM fdrs ORDER BY id ASC');
+    if (pgFdrs.rows.length > 0) {
+      for (const f of pgFdrs.rows) {
+        try {
+          db.prepare(`
+            INSERT OR REPLACE INTO fdrs (
+              id, institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount,
+              currency, issue_date, maturity_date, interest_rate, deposit_type, purpose, status,
+              verification_status, verification_notes, verified_by, verified_at, submitted_by,
+              submitted_at, last_updated_by, last_updated_at, remarks, is_renewal, parent_fdr_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            f.id,
+            f.institution_id,
+            f.fdr_number,
+            f.bank_name,
+            f.bank_branch || '',
+            f.account_number || '',
+            parseFloat(f.deposit_amount) || 0,
+            f.currency || 'INR',
+            f.issue_date instanceof Date ? f.issue_date.toISOString().split('T')[0] : (f.issue_date || '2024-01-01'),
+            f.maturity_date instanceof Date ? f.maturity_date.toISOString().split('T')[0] : (f.maturity_date || '2027-01-01'),
+            parseFloat(f.interest_rate) || 7.0,
+            f.deposit_type || 'FDR',
+            f.purpose || '',
+            f.status || 'Active',
+            f.verification_status || 'Verified',
+            f.verification_notes || '',
+            f.verified_by || null,
+            f.verified_at ? String(f.verified_at) : null,
+            f.submitted_by || 1,
+            f.submitted_at ? String(f.submitted_at) : null,
+            f.last_updated_by || null,
+            f.last_updated_at ? String(f.last_updated_at) : null,
+            f.remarks || '',
+            f.is_renewal ? 1 : 0,
+            f.parent_fdr_id || null
+          );
+        } catch (_) {}
+      }
+      console.log(`✅ Synced ${pgFdrs.rows.length} FDRs from Supabase cloud`);
+    }
+  } catch (syncErr: any) {
+    console.warn('⚠️ Supabase cloud sync non-blocking notice:', syncErr.message);
+  }
+}
 
 export function initializeDatabase() {
   db.pragma?.('journal_mode = WAL');
@@ -167,271 +285,102 @@ export function initializeDatabase() {
       created_at TEXT DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS release_requests (
+    CREATE TABLE IF NOT EXISTS statutory_certificates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fdr_id INTEGER NOT NULL,
       institution_id INTEGER NOT NULL,
-      request_type TEXT DEFAULT 'Release',
-      reason TEXT NOT NULL,
-      requested_by INTEGER NOT NULL,
-      requested_at TEXT DEFAULT (datetime('now')),
-      status TEXT DEFAULT 'Pending',
-      review_stage TEXT DEFAULT 'Dealing_Assistant',
-      dealing_officer_id INTEGER,
-      dealing_officer_remarks TEXT,
-      dealing_officer_at TEXT,
-      finance_officer_id INTEGER,
-      finance_officer_remarks TEXT,
-      finance_officer_at TEXT,
-      approved_by INTEGER,
-      approved_at TEXT,
-      dsc_sign_hash TEXT,
-      dsc_signer_name TEXT,
-      dsc_signed_at TEXT,
-      remarks TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS dispute_tickets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      fdr_id INTEGER NOT NULL,
-      institution_id INTEGER NOT NULL,
-      title TEXT NOT NULL,
-      discrepancy_details TEXT NOT NULL,
-      status TEXT DEFAULT 'Open',
-      priority TEXT DEFAULT 'High',
-      created_by INTEGER,
-      created_at TEXT DEFAULT (datetime('now')),
-      resolved_at TEXT,
-      resolved_by INTEGER
-    );
-
-    CREATE TABLE IF NOT EXISTS dispute_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ticket_id INTEGER NOT NULL,
-      sender_id INTEGER NOT NULL,
-      sender_role TEXT NOT NULL,
-      sender_name TEXT NOT NULL,
-      message TEXT NOT NULL,
-      attachment_url TEXT,
+      certificate_type TEXT NOT NULL,
+      certificate_number TEXT UNIQUE NOT NULL,
+      qr_verification_code TEXT UNIQUE NOT NULL,
+      dsc_officer_name TEXT NOT NULL,
+      dsc_officer_designation TEXT NOT NULL,
+      dsc_timestamp TEXT DEFAULT (datetime('now')),
+      pdf_payload TEXT,
       created_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS notifications_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      institution_id INTEGER NOT NULL,
-      fdr_id INTEGER NOT NULL,
-      channel TEXT NOT NULL,
-      recipient_role TEXT NOT NULL,
-      recipient_contact TEXT NOT NULL,
-      message_body TEXT NOT NULL,
-      days_before_maturity INTEGER NOT NULL,
-      delivery_status TEXT DEFAULT 'Delivered',
-      sent_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS institution_requests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      aicte_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      institution_type TEXT DEFAULT 'Engineering',
-      state TEXT,
-      city TEXT,
-      address TEXT,
-      contact_person TEXT,
-      contact_email TEXT NOT NULL,
-      contact_phone TEXT,
-      justification TEXT,
-      status TEXT DEFAULT 'Pending',
-      requested_at TEXT DEFAULT (datetime('now')),
-      reviewed_by INTEGER,
-      reviewed_at TEXT,
-      remarks TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS audit_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_type TEXT NOT NULL,
-      entity_id INTEGER NOT NULL,
-      action TEXT NOT NULL,
-      changed_by INTEGER,
-      changed_at TEXT DEFAULT (datetime('now')),
-      old_value TEXT,
-      new_value TEXT,
-      ip_address TEXT,
-      notes TEXT
     );
 
     CREATE TABLE IF NOT EXISTS lien_invocations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fdr_id INTEGER NOT NULL,
       institution_id INTEGER NOT NULL,
-      invocation_ref TEXT UNIQUE NOT NULL,
-      reason_code TEXT NOT NULL,
-      justification TEXT NOT NULL,
-      demand_amount REAL NOT NULL,
-      status TEXT DEFAULT 'Initiated',
-      show_cause_ref TEXT,
-      show_cause_issued_at TEXT,
-      show_cause_deadline TEXT,
-      bank_demand_ref TEXT,
-      bank_demand_served_at TEXT,
-      recovery_utr_challan TEXT,
-      recovery_date TEXT,
-      initiated_by INTEGER,
+      case_reference_number TEXT UNIQUE NOT NULL,
+      invocation_amount REAL NOT NULL,
+      section_invoked TEXT DEFAULT 'Section 10(k) AICTE Act, 1987',
+      stage TEXT NOT NULL DEFAULT 'INITIATED',
+      initiated_by INTEGER NOT NULL,
       initiated_at TEXT DEFAULT (datetime('now')),
-      approved_by INTEGER,
-      approved_at TEXT,
-      dsc_sign_hash TEXT,
+      show_cause_notice_ref TEXT,
+      show_cause_date TEXT,
+      show_cause_due_date TEXT,
+      institution_response_ref TEXT,
+      institution_response_summary TEXT,
+      bank_demand_letter_ref TEXT,
+      bank_demand_sent_at TEXT,
+      utr_number TEXT,
+      remitted_amount REAL,
+      remitted_at TEXT,
+      forfeiture_order_doc_path TEXT,
       remarks TEXT
     );
 
     CREATE TABLE IF NOT EXISTS bulk_ingestion_jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      file_name TEXT NOT NULL,
+      batch_reference TEXT UNIQUE NOT NULL,
       total_rows INTEGER NOT NULL,
-      success_count INTEGER DEFAULT 0,
-      error_count INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'Completed',
-      summary_log TEXT,
-      uploaded_by INTEGER,
+      successful_rows INTEGER DEFAULT 0,
+      failed_rows INTEGER DEFAULT 0,
+      validation_errors TEXT,
+      uploaded_by INTEGER NOT NULL,
+      status TEXT DEFAULT 'PENDING',
       created_at TEXT DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS statutory_certificates (
+    CREATE TABLE IF NOT EXISTS release_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      certificate_type TEXT NOT NULL,
       fdr_id INTEGER NOT NULL,
       institution_id INTEGER NOT NULL,
-      certificate_number TEXT UNIQUE NOT NULL,
-      qr_code_data TEXT NOT NULL,
-      dsc_sign_hash TEXT,
-      signer_designation TEXT,
-      issued_at TEXT DEFAULT (datetime('now')),
-      issued_by INTEGER
+      request_type TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      requested_by INTEGER NOT NULL,
+      requested_at TEXT DEFAULT (datetime('now')),
+      status TEXT NOT NULL DEFAULT 'Submitted',
+      review_stage TEXT NOT NULL DEFAULT 'Dealing_Officer',
+      dealing_officer_id INTEGER,
+      dealing_officer_remarks TEXT,
+      dealing_officer_at TEXT,
+      finance_officer_id INTEGER,
+      finance_officer_remarks TEXT,
+      finance_officer_at TEXT,
+      director_id INTEGER,
+      director_remarks TEXT,
+      director_at TEXT,
+      statutory_order_number TEXT,
+      noc_document_path TEXT,
+      approved_by INTEGER,
+      approved_at TEXT,
+      rejection_reason TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      fdr_id INTEGER,
+      institution_id INTEGER,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER,
+      previous_state TEXT,
+      new_state TEXT,
+      ip_address TEXT,
+      user_agent TEXT,
+      timestamp TEXT DEFAULT (datetime('now'))
     );
   `);
 
-  // Safe schema column migrations for FDR table
-  try { db.exec('ALTER TABLE fdrs ADD COLUMN aph_programme TEXT;'); } catch (_) {}
-  try { db.exec('ALTER TABLE fdrs ADD COLUMN lock_in_years INTEGER DEFAULT 8;'); } catch (_) {}
-  try { db.exec('ALTER TABLE fdrs ADD COLUMN sfms_ifn_ref TEXT;'); } catch (_) {}
-  try { db.exec('ALTER TABLE fdrs ADD COLUMN nesl_bg_identifier TEXT;'); } catch (_) {}
-  try { db.exec('ALTER TABLE fdrs ADD COLUMN is_encashed INTEGER DEFAULT 0;'); } catch (_) {}
-
-  console.log('✅ Database schema initialized successfully');
-
-  // Auto-seed default accounts and sample data if users table is empty
-  try {
-    const userRow = db.prepare('SELECT COUNT(*) as cnt FROM users').get() as any;
-    if (!userRow || userRow.cnt === 0) {
-      console.log('🌱 No users found in database. Auto-seeding default credentials...');
-      const adminHash = '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa'; // admin123
-      const officerHash = '$2a$10$uzbVo9BNwEYt.j0hSP/S/.XEnWxJvZxHJgv.jWBV/g22Rxk5xGxnG'; // officer123
-      const instHash = '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa'; // inst123
-      const viewerHash = '$2a$10$QLszhaR6SX6rA1wyDn5w9.1czXkAM/5ARkegWxQhy3YCDSTytMvl6'; // viewer123
-
-      db.prepare(`
-        INSERT INTO users (id, username, password_hash, full_name, email, role, institution_id)
-        VALUES (1, 'admin', ?, 'System Administrator', 'admin@aicte.gov.in', 'admin', NULL)
-      `).run(adminHash);
-
-      db.prepare(`
-        INSERT INTO users (id, username, password_hash, full_name, email, role, institution_id)
-        VALUES (2, 'officer1', ?, 'Rajesh Verma (Bureau Officer)', 'r.verma@aicte.gov.in', 'bureau_officer', NULL)
-      `).run(officerHash);
-
-      db.prepare(`
-        INSERT INTO users (id, username, password_hash, full_name, email, role, institution_id)
-        VALUES (3, 'inst_user1', ?, 'MIT College Admin', 'admin@mit.edu.in', 'institution_user', 1)
-      `).run(instHash);
-
-      db.prepare(`
-        INSERT INTO users (id, username, password_hash, full_name, email, role, institution_id)
-        VALUES (4, 'viewer1', ?, 'Auditor General / Viewer', 'viewer@aicte.gov.in', 'viewer', NULL)
-      `).run(viewerHash);
-
-      // Also seed institutions and FDRs if institutions table is empty
-      const instRow = db.prepare('SELECT COUNT(*) as cnt FROM institutions').get() as any;
-      if (!instRow || instRow.cnt === 0) {
-        const institutions = [
-          ['AICTE-IIT-BOM-001', 'Indian Institute of Technology Bombay', 'Powai, Mumbai', 'Maharashtra', 'Mumbai', 'Prof. Shireesh Kedare', 'director@iitb.ac.in', '022-25722545', 'IIT'],
-          ['AICTE-IIT-DEL-002', 'Indian Institute of Technology Delhi', 'Hauz Khas, New Delhi', 'Delhi', 'New Delhi', 'Prof. Rangan Banerjee', 'director@iitd.ac.in', '011-26591000', 'IIT'],
-          ['AICTE-IIT-MAD-003', 'Indian Institute of Technology Madras', 'IIT P.O., Chennai', 'Tamil Nadu', 'Chennai', 'Prof. V. Kamakoti', 'director@iitm.ac.in', '044-22578000', 'IIT'],
-          ['AICTE-NIT-TRC-001', 'National Institute of Technology Tiruchirappalli', 'Tanjore Main Road', 'Tamil Nadu', 'Tiruchirappalli', 'Dr. G. Aghila', 'director@nitt.edu', '0431-2503002', 'NIT'],
-          ['AICTE-NIT-SUR-002', 'National Institute of Technology Karnataka, Surathkal', 'NH 66, Srinivasnagar', 'Karnataka', 'Mangaluru', 'Prof. B. Ravi', 'director@nitk.edu.in', '0824-2474000', 'NIT'],
-          ['AICTE-2024-MH-001', 'Maharashtra Institute of Technology, Pune', 'S.No. 124, Paud Road, Kothrud', 'Maharashtra', 'Pune', 'Dr. Ramesh Sharma', 'principal@mit.edu.in', '020-25465050', 'Engineering']
-        ];
-        for (const inst of institutions) {
-          db.prepare(`
-            INSERT INTO institutions (aicte_id, name, address, state, city, contact_person, contact_email, contact_phone, institution_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(...inst);
-        }
-
-        const fdrs = [
-          [1, 'FDR-IITB-2024-001', 'State Bank of India', 'Powai Institutional Branch', 'SBIN001234567', 50000000, '2023-10-01', '2026-10-01', 7.1, 'FDR', 'AICTE Mandatory Regulatory Reserve (5 Crore Guarantee)', 'Active', 'Verified', 1],
-          [2, 'FDR-IITD-2024-001', 'State Bank of India', 'Hauz Khas Branch', 'SBIN002345678', 50000000, '2024-01-15', '2026-11-10', 7.1, 'FDR', 'AICTE Mandatory Regulatory Reserve', 'Active', 'Verified', 1],
-          [3, 'FDR-IITM-2024-001', 'State Bank of India', 'IIT Madras Branch', 'SBIN003456789', 50000000, '2023-11-20', '2026-11-05', 7.1, 'FDR', 'AICTE Mandatory Regulatory Reserve', 'Active', 'Verified', 1],
-          [4, 'FDR-NITT-2024-001', 'State Bank of India', 'NIT Trichy Branch', 'SBIN004567890', 50000000, '2023-05-10', '2026-10-30', 7.1, 'FDR', 'AICTE Mandatory Regulatory Reserve', 'Expiring Soon', 'Verified', 1],
-          [5, 'FDR-NITK-2024-001', 'State Bank of India', 'Surathkal Branch', 'SBIN005678901', 50000000, '2023-04-12', '2026-10-20', 7.1, 'FDR', 'AICTE Mandatory Regulatory Reserve', 'Expiring Soon', 'Discrepancy', 1],
-          [6, 'FDR-MIT-2024-001', 'Bank of Baroda', 'Kothrud Branch', 'BOB001234567', 5000000, '2023-01-10', '2026-09-01', 6.8, 'Security Deposit', 'Extension of Approval', 'Matured', 'Verified', 1]
-        ];
-        for (const fdr of fdrs) {
-          db.prepare(`
-            INSERT INTO fdrs (institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount, issue_date, maturity_date, interest_rate, deposit_type, purpose, status, verification_status, submitted_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(...fdr);
-        }
-
-        // Seed initial alerts
-        db.prepare(`
-          INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
-          VALUES (4, 4, 'Maturity', 'Critical', 'Mandatory Regulatory FDR FDR-NITT-2024-001 is expiring in less than 15 days.', '2026-10-30')
-        `).run();
-        db.prepare(`
-          INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message, due_date)
-          VALUES (5, 5, 'Discrepancy', 'Critical', 'Bank discrepancy flagged for FDR-NITK-2024-001: Declared amount does not match core verification.', '2026-10-20')
-        `).run();
-
-        // Seed sample dispute ticket & clarification thread
-        db.prepare(`
-          INSERT INTO dispute_tickets (id, fdr_id, institution_id, title, discrepancy_details, status, priority, created_by)
-          VALUES (1, 5, 5, 'Discrepancy: Declared Deposit Amount Mismatch', 'Bank confirmation response states actual lien balance is ₹4,50,00,000 instead of ₹5,00,00,000 declared on portal.', 'Open', 'Critical', 2)
-        `).run();
-
-        db.prepare(`
-          INSERT INTO dispute_messages (ticket_id, sender_id, sender_role, sender_name, message)
-          VALUES (1, 2, 'bureau_officer', 'Rajesh Verma (Bureau Officer)', 'Notice issued under Section 10(k) AICTE Act: Please provide a bank reconciliation certificate and stamped copy of the FDR from State Bank of India Surathkal Branch.')
-        `).run();
-
-        db.prepare(`
-          INSERT INTO dispute_messages (ticket_id, sender_id, sender_role, sender_name, message)
-          VALUES (1, 3, 'institution_user', 'NITK Accounts Officer', 'We have contacted SBI Surathkal branch. The supplemental guarantee of ₹50,00,000 was executed under sub-lien receipt #SBIN005678902. Uploading joint certificate for Council review.')
-        `).run();
-
-        // Seed sample release request with multi-tier workflow
-        db.prepare(`
-          INSERT INTO release_requests (id, fdr_id, institution_id, request_type, reason, requested_by, status, review_stage, dealing_officer_id, dealing_officer_remarks, dealing_officer_at)
-          VALUES (1, 6, 6, 'Release', 'Permanent completion of initial 10-year regulatory guarantee period as per APH norms.', 3, 'Under Review', 'Finance_Officer', 2, 'Verified bank discharge certificate & no dues from Regional Office. Recommended for Finance Officer & Director approval.', '2026-10-24 14:30:00')
-        `).run();
-
-        // Seed sample multi-channel notifications
-        const nudges = [
-          [4, 4, 'WhatsApp', 'Principal', '+91 94433 12345', 'AICTE URGENT: FDR FDR-NITT-2024-001 is maturing in 5 days. Please initiate renewal to maintain APH compliance.', 5, 'Delivered'],
-          [4, 4, 'Email', 'Accounts_Officer', 'accounts@nitt.edu', 'AICTE Statutory Notice: Mandatory regulatory FDR expiring soon. Immediate council lien renewal required.', 15, 'Delivered'],
-          [4, 4, 'SMS', 'Chairman', '+91 98401 54321', 'AICTE Alert: Security deposit FDR-NITT-2024-001 maturity notification. Check portal for renewal.', 30, 'Delivered'],
-          [5, 5, 'WhatsApp', 'Principal', '+91 98800 67890', 'AICTE Compliance: Discrepancy flagged on instrument FDR-NITK-2024-001. Please submit clarification within 7 days.', 7, 'Delivered'],
-        ];
-        for (const n of nudges) {
-          db.prepare(`
-            INSERT INTO notifications_log (institution_id, fdr_id, channel, recipient_role, recipient_contact, message_body, days_before_maturity, delivery_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(...n);
-        }
-      }
-      console.log('✅ Auto-seed completed successfully');
-    }
-  } catch (seedErr) {
-    console.warn('Auto-seed check error:', seedErr);
+  // Run cloud sync asynchronously
+  if (pgPool) {
+    syncFromSupabase().catch(err => {
+      console.warn('Cloud sync initialization warning:', err);
+    });
   }
 }

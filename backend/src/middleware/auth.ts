@@ -2,24 +2,19 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 
-// In production, reject static default fallback secrets to prevent token forgery
-function resolveJWTSecret(): string {
+// In production, require strong configured secret and fail-closed to prevent multi-instance authentication breaks
+export function resolveJWTSecret(): string {
   const configuredSecret = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
   if (configuredSecret && configuredSecret.trim().length >= 16) {
     return configuredSecret.trim();
   }
 
-  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
-    console.error('🚨 [FATAL SECURITY ERROR] JWT_SECRET must be configured with >= 16 chars in production!');
-    process.exit(1);
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+    console.error('🚨 [FATAL SECURITY ERROR] Strong JWT_SECRET with >= 16 characters must be configured in production!');
+    throw new Error('FATAL SECURITY CONFIGURATION: JWT_SECRET must be configured with at least 16 characters in production environment.');
   }
 
-  // Generate a persistent, cryptographically secure random secret for this runtime instance
-  const ephemeralSecret = crypto.randomBytes(32).toString('hex');
-  if (process.env.NODE_ENV === 'production') {
-    console.warn('⚠️ [SECURITY NOTICE] Production runtime auto-generated an ephemeral 256-bit JWT signing key to prevent forged fallback tokens.');
-  }
-  return ephemeralSecret;
+  return 'aicte-local-offline-dev-key-32chars!';
 }
 
 export const JWT_SECRET = resolveJWTSecret();

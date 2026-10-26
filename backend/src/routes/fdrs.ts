@@ -35,12 +35,16 @@ router.post('/ocr-extract', authenticate, upload.single('file'), async (req: Aut
 });
 
 // GET /api/fdrs/validate-ifsc/:ifsc - Authoritative RBI Scheduled Bank validation
-router.get('/validate-ifsc/:ifsc', (req, res) => {
-  const result = lookupIFSC(req.params.ifsc);
-  if (!result.valid) {
-    return res.status(400).json(result);
+router.get('/validate-ifsc/:ifsc', async (req, res) => {
+  try {
+    const result = await lookupIFSC(req.params.ifsc);
+    if (!result.valid) {
+      return res.status(400).json(result);
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ valid: false, error: err.message });
   }
-  return res.json(result);
 });
 
 // POST /api/fdrs/verify-nesl - NeSL Electronic Bank Guarantee (e-BG) Verification
@@ -49,7 +53,14 @@ router.post('/verify-nesl', authenticate, (req: AuthRequest, res) => {
   if (!nesl_identifier) {
     return res.status(400).json({ error: 'NeSL Identifier reference is required (e.g. NESL-2024-BG-889912)' });
   }
-  const result = verifyNeSLeBG(nesl_identifier, parseFloat(deposit_amount) || 0, bank_name || 'Scheduled Commercial Bank');
+  if (deposit_amount === undefined || deposit_amount === null || deposit_amount === '') {
+    return res.status(400).json({ error: 'Deposit amount is required for authentic NeSL e-BG matching.' });
+  }
+  const parsedAmount = parseFloat(deposit_amount);
+  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    return res.status(400).json({ error: 'Valid positive deposit amount is required.' });
+  }
+  const result = verifyNeSLeBG(nesl_identifier, parsedAmount, bank_name || 'Scheduled Commercial Bank');
   return res.json(result);
 });
 
@@ -210,6 +221,20 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
   const instExists = await db.prepare('SELECT id FROM institutions WHERE id = ?').get(targetInstitutionId);
   if (!instExists) {
     return res.status(400).json({ error: 'Specified institution does not exist in registry' });
+  }
+
+  // Strictly validate predecessor instrument ownership on renewals
+  if (is_renewal || parent_fdr_id) {
+    if (!parent_fdr_id) {
+      return res.status(400).json({ error: 'Parent FDR ID is mandatory when submitting an instrument renewal.' });
+    }
+    const parentFdr = await db.prepare('SELECT id, institution_id, fdr_number FROM fdrs WHERE id = ?').get(parent_fdr_id) as any;
+    if (!parentFdr) {
+      return res.status(400).json({ error: 'Predecessor renewal FDR not found in registry.' });
+    }
+    if (Number(parentFdr.institution_id) !== Number(targetInstitutionId)) {
+      return res.status(403).json({ error: 'Security violation: Predecessor renewal instrument belongs to a different institution.' });
+    }
   }
 
   try {
@@ -386,10 +411,11 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
     }
 
     let sha256Hash = '0x' + crypto.randomBytes(32).toString('hex');
+    let fileBuffer: Buffer | null = null;
     try {
       if (req.file.path && fs.existsSync(req.file.path)) {
-        const fileBuf = fs.readFileSync(req.file.path);
-        sha256Hash = '0x' + crypto.createHash('sha256').update(fileBuf).digest('hex');
+        fileBuffer = fs.readFileSync(req.file.path);
+        sha256Hash = '0x' + crypto.createHash('sha256').update(fileBuffer).digest('hex');
       }
     } catch (_) {}
 
@@ -404,12 +430,22 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
           req.file!.size, req.file!.mimetype, sha256Hash, req.user!.userId
         ]);
 
+        const docId = result.lastInsertRowid;
+
+        // Durably persist document byte payload in PostgreSQL to survive serverless ephemeral containers
+        if (fileBuffer) {
+          await tx.execute(`
+            INSERT INTO document_payloads (fdr_document_id, data, mime_type, file_name)
+            VALUES (?, ?, ?, ?)
+          `, [docId, fileBuffer, req.file!.mimetype, req.file!.originalname]);
+        }
+
         await tx.execute(`
           INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
           VALUES ('FDR', ?, 'Document Uploaded', ?, ?, ?)
-        `, [fdr.id, req.user!.userId, JSON.stringify({ document_name: req.file!.originalname, sha256: sha256Hash }), `Document ${req.file!.originalname} anchored`]);
+        `, [fdr.id, req.user!.userId, JSON.stringify({ document_name: req.file!.originalname, sha256: sha256Hash }), `Document ${req.file!.originalname} anchored durably in cloud`]);
 
-        return await tx.queryOne('SELECT * FROM fdr_documents WHERE id = ?', [result.lastInsertRowid]);
+        return await tx.queryOne('SELECT * FROM fdr_documents WHERE id = ?', [docId]);
       });
 
       return res.status(201).json(createdDoc);

@@ -357,6 +357,20 @@ export async function initializeDatabase() {
           is_active INTEGER DEFAULT 1
         );
 
+        CREATE TABLE IF NOT EXISTS document_payloads (
+          fdr_document_id INTEGER PRIMARY KEY REFERENCES fdr_documents(id) ON DELETE CASCADE,
+          data BYTEA NOT NULL,
+          mime_type VARCHAR(100),
+          file_name VARCHAR(255),
+          uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS consumed_view_tokens (
+          token_jti VARCHAR(100) PRIMARY KEY,
+          document_id INTEGER,
+          consumed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS alerts (
           id SERIAL PRIMARY KEY,
           fdr_id INTEGER REFERENCES fdrs(id) ON DELETE CASCADE,

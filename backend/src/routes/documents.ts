@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { db } from '../db/database';
 import { authenticate, AuthRequest, JWT_SECRET } from '../middleware/auth';
@@ -26,20 +27,24 @@ router.post('/:id/view-token', authenticate, async (req: AuthRequest, res) => {
     return res.status(403).json({ error: 'Access denied: Clearance required for this institutional record.' });
   }
 
+  // Generate cryptographically unique JTI to enforce single-use consumption
+  const jti = crypto.randomUUID();
+
   // Sign a restricted 60-second viewing token tied specifically to this document ID
   const viewToken = jwt.sign(
-    { docId: doc.id, userId: req.user!.userId, purpose: 'DOCUMENT_STREAM_VIEW' },
+    { docId: doc.id, userId: req.user!.userId, purpose: 'DOCUMENT_STREAM_VIEW', jti },
     JWT_SECRET,
     { expiresIn: '60s' }
   );
 
-  return res.json({ view_token: viewToken, expires_in_seconds: 60 });
+  return res.json({ view_token: viewToken, expires_in_seconds: 60, jti });
 });
 
 // GET /api/documents/stream/:id - Secure, authorized document streaming
 router.get('/stream/:id', async (req: any, res) => {
   // Support either standard Authorization header OR short-lived single-use view token
   let authenticatedUser: any = null;
+  let singleUseJti: string | null = null;
 
   const authHeader = req.headers.authorization;
   const queryToken = req.query.token || req.query.viewToken;
@@ -55,6 +60,17 @@ router.get('/stream/:id', async (req: any, res) => {
       if (payload.purpose === 'DOCUMENT_STREAM_VIEW') {
         if (Number(payload.docId) !== Number(req.params.id)) {
           return res.status(403).json({ error: 'Security violation: View token does not match requested document.' });
+        }
+        if (payload.jti) {
+          // Verify if token has already been consumed
+          const alreadyConsumed = await db.queryOne(
+            'SELECT token_jti FROM consumed_view_tokens WHERE token_jti = ?',
+            [payload.jti]
+          );
+          if (alreadyConsumed) {
+            return res.status(403).json({ error: 'Security violation: This single-use view token has already been consumed.' });
+          }
+          singleUseJti = payload.jti;
         }
       }
       authenticatedUser = payload;
@@ -81,7 +97,34 @@ router.get('/stream/:id', async (req: any, res) => {
     return res.status(403).json({ error: 'Access denied: You do not possess clearance for this institutional record.' });
   }
 
-  // Resolve absolute file path
+  // Atomically consume single-use token if verified
+  if (singleUseJti) {
+    try {
+      await db.execute(
+        'INSERT INTO consumed_view_tokens (token_jti, document_id) VALUES (?, ?)',
+        [singleUseJti, doc.id]
+      );
+    } catch (_) {}
+  }
+
+  // 1. Durably stream from cloud database payload (PostgreSQL bytea) if available
+  const payloadRow = await db.queryOne(
+    'SELECT data, mime_type, file_name FROM document_payloads WHERE fdr_document_id = ?',
+    [doc.id]
+  );
+
+  if (payloadRow && payloadRow.data) {
+    const mimeType = payloadRow.mime_type || doc.mime_type || 'application/pdf';
+    const buf = Buffer.isBuffer(payloadRow.data) ? payloadRow.data : Buffer.from(payloadRow.data);
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Length', buf.length);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name)}"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    return res.end(buf);
+  }
+
+  // 2. Fallback to local filesystem path for legacy/seeded local files
   let targetPath = path.isAbsolute(doc.file_path)
     ? doc.file_path
     : path.join(UPLOAD_DIR_PATH, doc.file_path);
@@ -99,7 +142,7 @@ router.get('/stream/:id', async (req: any, res) => {
   res.setHeader('Content-Type', mimeType);
   res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name)}"`);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate'); // Never cache financial documents publicly
+  res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
 
   const readStream = fs.createReadStream(targetPath);
   readStream.pipe(res);

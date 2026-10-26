@@ -6,9 +6,11 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "seed": "ts-node src/db/seed.ts"
+    "seed": "ts-node src/db/seed.ts",
+    "test:audit": "node test_audit_suite.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
@@ -16,6 +18,7 @@
     "@types/multer": "^1.4.11",
     "@types/node": "^20.11.5",
     "@types/node-cron": "^3.0.11",
+    "@types/pdf-parse": "^1.1.5",
     "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.6",
     "bcryptjs": "^2.4.3",
@@ -27,8 +30,10 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4",
+    "tesseract.js": "^7.0.0",
     "typescript": "^5.3.3"
   },
   "devDependencies": {

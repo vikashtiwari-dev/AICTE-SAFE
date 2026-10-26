@@ -115,8 +115,8 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
   const request = await db.prepare('SELECT r.*, f.fdr_number, f.deposit_amount FROM release_requests r JOIN fdrs f ON r.fdr_id = f.id WHERE r.id = ?').get(req.params.id) as any;
   if (!request) return res.status(404).json({ error: 'Release request not found' });
 
-  // Maker-Checker Rule: Recommender / Requester cannot review their own request
-  if (request.requested_by === req.user!.userId && req.user!.role !== 'admin') {
+  // Maker-Checker Rule: Recommender / Requester cannot review their own request (Strictly enforced, no exceptions)
+  if (request.requested_by === req.user!.userId) {
     return res.status(403).json({ error: 'Maker-Checker policy violation: The officer who submitted or requested this release cannot review or clear it.' });
   }
 
@@ -171,6 +171,11 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
       return res.status(400).json({ error: `State transition error: Finance Officer clearance required before forwarding to Competent Authority. Current stage: "${request.review_stage}".` });
     }
 
+    // Separation of Duties: Dealing Officer who performed initial scrutiny cannot also act as Finance Officer
+    if (request.dealing_officer_id && Number(request.dealing_officer_id) === Number(req.user!.userId)) {
+      return res.status(403).json({ error: 'Separation of duties violation: Dealing officer who performed initial scrutiny cannot act as Finance Officer.' });
+    }
+
     await db.transaction(async (tx) => {
       await tx.execute(`
         UPDATE release_requests 
@@ -202,6 +207,17 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
     return res.status(400).json({
       error: `Approval Gate Violation: Cannot issue statutory discharge order. Case must first clear Dealing Assistant and Finance Officer scrutiny. Current stage: "${request.review_stage}".`
     });
+  }
+
+  // Maker-Checker & Separation of Duties: Approving Director cannot be requester, dealing officer, or finance officer
+  if (request.requested_by && Number(request.requested_by) === Number(req.user!.userId)) {
+    return res.status(403).json({ error: 'Maker-Checker policy violation: Recommender/Requester cannot approve the final statutory release order.' });
+  }
+  if (request.dealing_officer_id && Number(request.dealing_officer_id) === Number(req.user!.userId)) {
+    return res.status(403).json({ error: 'Separation of duties violation: Dealing Officer who conducted initial scrutiny cannot act as Approving Director.' });
+  }
+  if (request.finance_officer_id && Number(request.finance_officer_id) === Number(req.user!.userId)) {
+    return res.status(403).json({ error: 'Separation of duties violation: Finance Officer who cleared financial concurrence cannot act as Approving Director.' });
   }
 
   // Generate SHA-256 Statutory Electronic Order Attestation Hash

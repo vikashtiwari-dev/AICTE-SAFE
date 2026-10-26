@@ -81,6 +81,18 @@ cCQq7WEcSzy2kH6DWMkWoF0zbg==
 
 export const SUPABASE_CA_BUNDLE = [SUPABASE_ROOT_CA, SUPABASE_INTERMEDIATE_CA].join('\n');
 
+export function getTrustedCABundle(): string {
+  const parts = [SUPABASE_ROOT_CA, SUPABASE_INTERMEDIATE_CA];
+  if (process.env.DATABASE_CA && process.env.DATABASE_CA.trim().length > 50) {
+    let customCa = process.env.DATABASE_CA.trim();
+    if (customCa.includes('\\n')) {
+      customCa = customCa.replace(/\\n/g, '\n');
+    }
+    parts.push(customCa);
+  }
+  return parts.join('\n');
+}
+
 let pgPool: Pool | null = null;
 const rawDbUrl =
   process.env.DATABASE_URL ||
@@ -96,7 +108,7 @@ if (rawDbUrl) {
   try {
     // Enforce strict TLS certificate verification with trusted CA chain
     const sslConfig = {
-      ca: process.env.DATABASE_CA || SUPABASE_CA_BUNDLE,
+      ca: getTrustedCABundle(),
       rejectUnauthorized: true,
     };
 
@@ -106,6 +118,9 @@ if (rawDbUrl) {
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 7000,
+    });
+    pgPool.on('error', (err: any) => {
+      console.warn('⚠️ Idle PostgreSQL client notice:', err.message);
     });
     console.log('✅ PostgreSQL is configured as the SOLE SOURCE OF TRUTH (Strict TLS verified, rejectUnauthorized: true)');
   } catch (poolErr: any) {

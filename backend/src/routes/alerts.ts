@@ -1,5 +1,5 @@
 import express from 'express';
-import { db } from '../db/database';
+import { db, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { generateAlerts, dispatchStatutoryNudges, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
 
@@ -102,10 +102,14 @@ router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer
         WHERE id = ?
       `, [req.user!.userId, req.params.id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('Alert', ?, 'Resolved', ?, ?, ?)
-      `, [req.params.id, req.user!.userId, JSON.stringify({ is_resolved: 1, resolved_by: req.user!.userId }), `Alert #${req.params.id} resolved`]);
+      await recordAuditLog(tx, {
+        entity_type: 'Alert',
+        entity_id: Number(req.params.id),
+        action: 'Resolved',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ is_resolved: 1, resolved_by: req.user!.userId }),
+        notes: `Alert #${req.params.id} resolved`
+      });
     });
 
     return res.json({ success: true, message: 'Alert marked resolved in national compliance registry.' });
@@ -154,10 +158,14 @@ router.put('/settings', authenticate, requireRole(['admin']), async (req: AuthRe
     }, req.user!.userId);
 
     // Record change in audit trail
-    await db.execute(`
-      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-      VALUES ('SystemSetting', 0, 'Alert Thresholds Updated', ?, ?, 'Administrator updated maturity alert thresholds')
-    `, [req.user!.userId, JSON.stringify(saved)]);
+    await recordAuditLog(db, {
+      entity_type: 'SystemSetting',
+      entity_id: 0,
+      action: 'Alert Thresholds Updated',
+      changed_by: req.user!.userId,
+      new_value: JSON.stringify(saved),
+      notes: 'Administrator updated maturity alert thresholds'
+    });
 
     return res.json({
       success: true,

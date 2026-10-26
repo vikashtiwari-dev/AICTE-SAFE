@@ -1,5 +1,5 @@
 import express from 'express';
-import { db } from '../db/database';
+import { db, verifyAuditChain } from '../db/database';
 import { authenticate, AuthRequest, maskAccountNumber } from '../middleware/auth';
 
 const router = express.Router();
@@ -374,6 +374,24 @@ router.get('/export-csv', authenticate, async (req: AuthRequest, res) => {
     return res.status(200).send(csvContent);
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to generate CSV export' });
+  }
+});
+
+// GET /api/reports/verify-audit-chain - Mathematical zero-repudiation audit ledger verification
+router.get('/verify-audit-chain', authenticate, async (req: AuthRequest, res) => {
+  try {
+    const chainStatus = await verifyAuditChain();
+    return res.json({
+      success: true,
+      service: 'AICTE-SAFE Cryptographic Ledger Validator',
+      algorithm: 'SHA-256 Chained Hash Anchor',
+      status: chainStatus.valid ? 'VERIFIED_TAMPER_FREE' : 'CORRUPTED',
+      ...chainStatus,
+      verified_at: new Date().toISOString(),
+      verified_by: req.user?.username || 'SYSTEM'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to verify audit ledger chain', details: err.message });
   }
 });
 

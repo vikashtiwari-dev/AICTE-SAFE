@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { db, executeMutation } from '../db/database';
+import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest, maskAccountNumber } from '../middleware/auth';
 import { upload, validateFileMagic } from '../middleware/upload';
 import { lookupIFSC, verifyNeSLeBG, validateSFMS_IFN760 } from '../services/bankingService';
@@ -293,10 +293,14 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
         req.user!.userId, req.user!.userId
       ]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('FDR', ?, 'Created', ?, ?, ?)
-      `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ fdr_number, deposit_amount: numAmount, status: 'Pending Verification' }), 'New regulatory instrument submitted']);
+      await recordAuditLog(tx, {
+        entity_type: 'FDR',
+        entity_id: result.lastInsertRowid,
+        action: 'Created',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ fdr_number, deposit_amount: numAmount, status: 'Pending Verification' }),
+        notes: 'New regulatory instrument submitted'
+      });
 
       return await tx.queryOne('SELECT * FROM fdrs WHERE id = ?', [result.lastInsertRowid]);
     });
@@ -383,10 +387,15 @@ router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async
         req.user!.userId, req.params.id
       ]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, old_value, new_value, notes)
-        VALUES ('FDR', ?, 'Updated', ?, ?, ?, ?)
-      `, [req.params.id, req.user!.userId, oldState, JSON.stringify({ status: targetStatus, deposit_amount: updatedAmount }), `FDR parameters updated by ${req.user!.username}`]);
+      await recordAuditLog(tx, {
+        entity_type: 'FDR',
+        entity_id: Number(req.params.id),
+        action: 'Updated',
+        changed_by: req.user!.userId,
+        old_value: oldState,
+        new_value: JSON.stringify({ status: targetStatus, deposit_amount: updatedAmount }),
+        notes: `FDR parameters updated by ${req.user!.username}`
+      });
 
       return await tx.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]);
     });
@@ -451,16 +460,15 @@ router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer'
         WHERE id = ?
       `, [verification_status, verification_notes || null, req.user!.userId, newFdrStatus, req.user!.userId, req.params.id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, old_value, new_value, notes)
-        VALUES ('FDR', ?, ?, ?, ?, ?, ?)
-      `, [
-        req.params.id, req.user!.userId,
-        verification_status === 'Verified' ? 'Verification Approved' : 'Discrepancy Flagged',
-        JSON.stringify({ verification_status: fdr.verification_status }),
-        JSON.stringify({ verification_status, verification_method: verification_method || 'MANUAL', notes: verification_notes }),
-        verification_notes || `Status marked as ${verification_status}`
-      ]);
+      await recordAuditLog(tx, {
+        entity_type: 'FDR',
+        entity_id: Number(req.params.id),
+        action: verification_status === 'Verified' ? 'Verification Approved' : 'Discrepancy Flagged',
+        changed_by: req.user!.userId,
+        old_value: JSON.stringify({ verification_status: fdr.verification_status }),
+        new_value: JSON.stringify({ verification_status, verification_method: verification_method || 'MANUAL', notes: verification_notes }),
+        notes: verification_notes || `Status marked as ${verification_status}`
+      });
 
       // If discrepancy flagged, create a high-priority alert
       if (verification_status === 'Discrepancy') {
@@ -542,10 +550,14 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
         // Clean up temporary local staging file so no sensitive unencrypted file remains on server disk
         try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch (_) {}
 
-        await tx.execute(`
-          INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-          VALUES ('FDR', ?, 'Document Uploaded', ?, ?, ?)
-        `, [fdr.id, req.user!.userId, JSON.stringify({ document_name: req.file!.originalname, sha256: sha256Hash, version: nextVersion }), `Document ${req.file!.originalname} (v${nextVersion}) anchored durably in cloud`]);
+        await recordAuditLog(tx, {
+          entity_type: 'FDR',
+          entity_id: fdr.id,
+          action: 'Document Uploaded',
+          changed_by: req.user!.userId,
+          new_value: JSON.stringify({ document_name: req.file!.originalname, sha256: sha256Hash, version: nextVersion }),
+          notes: `Document ${req.file!.originalname} (v${nextVersion}) anchored durably in cloud`
+        });
 
         return await tx.queryOne('SELECT * FROM fdr_documents WHERE id = ?', [docId]);
       });
@@ -582,10 +594,14 @@ router.delete('/:id/documents/:docId', authenticate, requireRole(['admin', 'bure
   try {
     await db.transaction(async (tx) => {
       await tx.execute('UPDATE fdr_documents SET is_active = 0 WHERE id = ? AND fdr_id = ?', [req.params.docId, req.params.id]);
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('FDR', ?, 'Document Revoked', ?, ?, ?)
-      `, [req.params.id, req.user!.userId, JSON.stringify({ revoked_document_id: req.params.docId }), `Document ${req.params.docId} revoked`]);
+      await recordAuditLog(tx, {
+        entity_type: 'FDR',
+        entity_id: Number(req.params.id),
+        action: 'Document Revoked',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ revoked_document_id: req.params.docId }),
+        notes: `Document ${req.params.docId} revoked`
+      });
     });
     return res.json({ success: true });
   } catch (err: any) {
@@ -649,10 +665,14 @@ router.post('/:id/renew', authenticate, requireRole(['admin', 'bureau_officer', 
       // Update parent status to Renewed
       await tx.execute("UPDATE fdrs SET status = 'Renewed', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, parentFdr.id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('FDR', ?, 'Renewal Created', ?, ?, ?)
-      `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ parent_fdr_id: parentFdr.id, renewal_fdr_number: fdr_number }), `Renewal of ${parentFdr.fdr_number}`]);
+      await recordAuditLog(tx, {
+        entity_type: 'FDR',
+        entity_id: result.lastInsertRowid,
+        action: 'Renewal Created',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ parent_fdr_id: parentFdr.id, renewal_fdr_number: fdr_number }),
+        notes: `Renewal of ${parentFdr.fdr_number}`
+      });
 
       return await tx.queryOne('SELECT * FROM fdrs WHERE id = ?', [result.lastInsertRowid]);
     });

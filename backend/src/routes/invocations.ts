@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, executeMutation } from '../db/database';
+import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = express.Router();
@@ -105,10 +105,14 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer']), async (
       `, [fdr.id, fdr.institution_id, `STATUTORY LIEN INVOCATION initiated for FDR ${fdr.fdr_number} (Ref: ${invocationRef}). Reason: ${reason_code}`]);
 
       // Audit log
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('Lien_Invocation', ?, 'Initiated', ?, ?, ?)
-      `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ invocation_ref: invocationRef, fdr_number: fdr.fdr_number, demand_amount: amount }), `Lien Invocation ${invocationRef} opened`]);
+      await recordAuditLog(tx, {
+        entity_type: 'Lien_Invocation',
+        entity_id: result.lastInsertRowid,
+        action: 'Initiated',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ invocation_ref: invocationRef, fdr_number: fdr.fdr_number, demand_amount: amount }),
+        notes: `Lien Invocation ${invocationRef} opened`
+      });
 
       return await tx.queryOne('SELECT * FROM lien_invocations WHERE id = ?', [result.lastInsertRowid]);
     });
@@ -141,10 +145,14 @@ router.post('/:id/show-cause', authenticate, requireRole(['admin', 'bureau_offic
         WHERE id = ?
       `, [showCauseRef, deadline, req.body.remarks || `Show cause notice issued with ${cureDays}-day cure window`, req.params.id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('Lien_Invocation', ?, 'Show-Cause Notice Issued', ?, ?, ?)
-      `, [req.params.id, req.user!.userId, JSON.stringify({ show_cause_ref: showCauseRef, deadline }), `Show-Cause Notice ${showCauseRef} served`]);
+      await recordAuditLog(tx, {
+        entity_type: 'Lien_Invocation',
+        entity_id: Number(req.params.id),
+        action: 'Show-Cause Notice Issued',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ show_cause_ref: showCauseRef, deadline }),
+        notes: `Show-Cause Notice ${showCauseRef} served`
+      });
     });
 
     return res.json({
@@ -176,10 +184,14 @@ router.post('/:id/serve-demand', authenticate, requireRole(['admin', 'bureau_off
         WHERE id = ?
       `, [bankDemandRef, req.body.remarks || 'Bank Demand Notice for encashment served on Branch Manager.', req.params.id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('Lien_Invocation', ?, 'Bank Demand Served', ?, ?, ?)
-      `, [req.params.id, req.user!.userId, JSON.stringify({ bank_demand_ref: bankDemandRef }), `Bank Demand Order ${bankDemandRef} served`]);
+      await recordAuditLog(tx, {
+        entity_type: 'Lien_Invocation',
+        entity_id: Number(req.params.id),
+        action: 'Bank Demand Served',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ bank_demand_ref: bankDemandRef }),
+        notes: `Bank Demand Order ${bankDemandRef} served`
+      });
     });
 
     return res.json({
@@ -225,10 +237,14 @@ router.patch('/:id/confirm-recovery', authenticate, requireRole(['admin', 'burea
         WHERE id = ?
       `, [req.user!.userId, inv.fdr_id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('Lien_Invocation', ?, 'Forfeiture Confirmed', ?, ?, ?)
-      `, [req.params.id, req.user!.userId, JSON.stringify({ utr: recovery_utr_challan, amount: inv.invocation_amount }), `Forfeiture confirmed via UTR ${recovery_utr_challan}`]);
+      await recordAuditLog(tx, {
+        entity_type: 'Lien_Invocation',
+        entity_id: Number(req.params.id),
+        action: 'Forfeiture Confirmed',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ utr: recovery_utr_challan, amount: inv.invocation_amount }),
+        notes: `Forfeiture confirmed via UTR ${recovery_utr_challan}`
+      });
     });
 
     return res.json({
@@ -256,10 +272,14 @@ router.patch('/:id/drop', authenticate, requireRole(['admin']), async (req: Auth
 
       await tx.execute("UPDATE fdrs SET status = 'Active', last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP WHERE id = ?", [req.user!.userId, inv.fdr_id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('Lien_Invocation', ?, 'Dropped', ?, ?, ?)
-      `, [req.params.id, req.user!.userId, JSON.stringify({ reason: req.body.remarks }), `Dropped: ${req.body.remarks}`]);
+      await recordAuditLog(tx, {
+        entity_type: 'Lien_Invocation',
+        entity_id: Number(req.params.id),
+        action: 'Dropped',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ reason: req.body.remarks }),
+        notes: `Dropped: ${req.body.remarks}`
+      });
     });
 
     return res.json({ success: true, message: 'Lien Invocation dropped. FDR restored to Active status.' });

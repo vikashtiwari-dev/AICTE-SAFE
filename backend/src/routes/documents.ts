@@ -115,7 +115,12 @@ router.get('/stream/:id', async (req: any, res) => {
     return res.end(buf);
   }
 
-  // 2. Fallback to local filesystem path for legacy/seeded local files
+  // 2. In production / cloud serverless, require durable cloud byte payload
+  if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Document payload not found in durable cloud storage.' });
+  }
+
+  // 3. Fallback to local filesystem path ONLY for offline local development
   let targetPath = path.isAbsolute(doc.file_path)
     ? doc.file_path
     : path.join(UPLOAD_DIR_PATH, doc.file_path);

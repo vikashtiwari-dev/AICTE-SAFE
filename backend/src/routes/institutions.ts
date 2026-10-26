@@ -1,5 +1,5 @@
 import express from 'express';
-import { db, executeMutation } from '../db/database';
+import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 
 const router = express.Router();
@@ -152,10 +152,14 @@ router.patch('/requests/:id/approve', authenticate, requireRole(['admin', 'burea
         WHERE id = ?
       `, [req.user!.userId, request.id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('Institution', ?, 'Onboarding Approved', ?, ?, ?)
-      `, [instResult.lastInsertRowid, req.user!.userId, JSON.stringify({ aicte_id: request.aicte_id, name: request.name }), `Approved ${request.name}`]);
+      await recordAuditLog(tx, {
+        entity_type: 'Institution',
+        entity_id: instResult.lastInsertRowid,
+        action: 'Onboarding Approved',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ aicte_id: request.aicte_id, name: request.name }),
+        notes: `Approved ${request.name}`
+      });
 
       return await tx.queryOne('SELECT * FROM institutions WHERE id = ?', [instResult.lastInsertRowid]);
     });
@@ -192,10 +196,14 @@ router.patch('/requests/:id/reject', authenticate, requireRole(['admin', 'bureau
         WHERE id = ?
       `, [remarks, req.user!.userId, request.id]);
 
-      await tx.execute(`
-        INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
-        VALUES ('InstitutionRequest', ?, 'Onboarding Rejected', ?, ?, ?)
-      `, [request.id, req.user!.userId, JSON.stringify({ rejection_reason: remarks }), remarks]);
+      await recordAuditLog(tx, {
+        entity_type: 'InstitutionRequest',
+        entity_id: request.id,
+        action: 'Onboarding Rejected',
+        changed_by: req.user!.userId,
+        new_value: JSON.stringify({ rejection_reason: remarks }),
+        notes: remarks
+      });
     });
 
     return res.json({ message: 'Institution onboarding request rejected.', remarks });

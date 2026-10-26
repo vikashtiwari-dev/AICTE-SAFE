@@ -106,7 +106,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
 
     return res.status(201).json(createdRequest);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to create release request', details: err.message });
+    return res.status(500).json({ error: 'Failed to create release request' });
   }
 });
 
@@ -197,9 +197,13 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
   }
 });
 
-// POST /api/releases/:id/dsc-sign - Statutory Order Attestation Seal (Director / Competent Authority)
-router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
-  const { signer_name = 'Director, AICTE Regulation Bureau', officer_designation = 'Competent Authority' } = req.body;
+// POST /api/releases/:id/dsc-sign - Statutory Order Attestation Seal (Director / Competent Authority only)
+router.post('/:id/dsc-sign', authenticate, requireRole(['admin']), async (req: AuthRequest, res) => {
+  // Derive signer identity strictly from database record of authenticated session - ignore client body
+  const signingUser = await db.queryOne('SELECT id, full_name, role FROM users WHERE id = ?', [req.user!.userId]) as any;
+  const signerName = signingUser?.full_name || req.user!.username || 'Director, AICTE Regulation Bureau';
+  const officerDesignation = 'Competent Authority (Director / Member Secretary)';
+
   const request = await db.prepare('SELECT r.*, f.fdr_number, f.deposit_amount FROM release_requests r JOIN fdrs f ON r.fdr_id = f.id WHERE r.id = ?').get(req.params.id) as any;
   if (!request) return res.status(404).json({ error: 'Release request not found' });
 
@@ -224,7 +228,7 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
   // Generate authentic SHA-256 Statutory Electronic Order Attestation Hash
   const timestamp = new Date().toISOString();
   const orderNumber = `AICTE/REG/FDR-REL/${new Date().getFullYear()}/${request.id.toString().padStart(5, '0')}`;
-  const dscPayload = `AICTE-STATUTORY-RELEASE-ORDER|ORDER_NO:${orderNumber}|REQ:${request.id}|FDR:${request.fdr_id}|OFFICER:${signer_name}|TS:${timestamp}`;
+  const dscPayload = `AICTE-STATUTORY-RELEASE-ORDER|ORDER_NO:${orderNumber}|REQ:${request.id}|FDR:${request.fdr_id}|OFFICER:${signerName}|TS:${timestamp}`;
   const dscHash = 'SEAL-SHA256-' + crypto.createHash('sha256').update(dscPayload).digest('hex').toUpperCase();
 
   try {
@@ -238,7 +242,7 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
             statutory_order_number = ?,
             remarks = 'Statutory Release Order approved under Section 10(k) AICTE Act'
         WHERE id = ?
-      `, [req.user!.userId, req.user!.userId, `Formally sanctioned by ${signer_name} (${officer_designation})`, orderNumber, req.params.id]);
+      `, [req.user!.userId, req.user!.userId, `Formally sanctioned by ${signerName} (${officerDesignation})`, orderNumber, req.params.id]);
 
       await tx.execute(`
         INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
@@ -246,10 +250,10 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
       `, [req.params.id, req.user!.userId, JSON.stringify({
         order_number: orderNumber,
         seal_hash: dscHash,
-        signer: signer_name,
-        designation: officer_designation,
+        signer: signerName,
+        designation: officerDesignation,
         statutory_basis: 'Section 10(k) AICTE Act, 1987'
-      }), `Sanctioned by ${signer_name}`]);
+      }), `Sanctioned by ${signerName}`]);
     });
 
     return res.json({
@@ -257,13 +261,13 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin', 'bureau_officer
       message: 'Statutory release order approved and cryptographically sealed for regulatory record.',
       order_number: orderNumber,
       approval_seal: dscHash,
-      approving_officer: signer_name,
-      designation: officer_designation,
+      approving_officer: signerName,
+      designation: officerDesignation,
       timestamp,
       legal_disclosure: 'Statutory Electronic Approval Attestation (Section 10 AICTE Act Audit Trail) - Prototype Seal'
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Approval order failed to record in cloud database', details: err.message });
+    return res.status(500).json({ error: 'Approval order failed to record in cloud database' });
   }
 });
 
@@ -314,17 +318,17 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
         release_request_id: request.id,
         order_number: request.statutory_order_number,
         discharged_by: req.user!.userId
-      }), 'FDR marked Released in national registry']);
+      }), 'Marked released in portal registry — Bank Lien Relinquished']);
     });
 
     return res.json({
       success: true,
-      message: 'FDR instrument successfully discharged and marked Released in the national registry.',
+      message: 'FDR instrument successfully discharged and marked Released in the national registry (Bank Lien Relinquished in Portal Registry).',
       fdr_id: request.fdr_id,
       order_number: request.statutory_order_number
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Discharge transaction failed', details: err.message });
+    return res.status(500).json({ error: 'Discharge transaction failed' });
   }
 });
 

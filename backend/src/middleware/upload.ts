@@ -43,15 +43,17 @@ export const upload = multer({
  * Fails closed on any error or unrecognized header.
  */
 export function validateFileMagic(filePath: string): boolean {
+  let fd: number | null = null;
   try {
     if (!fs.existsSync(filePath)) return false;
     const stat = fs.statSync(filePath);
     if (stat.size < 4) return false;
 
-    const fd = fs.openSync(filePath, 'r');
-    const buffer = Buffer.alloc(16);
-    fs.readSync(fd, buffer, 0, 16, 0);
+    fd = fs.openSync(filePath, 'r');
+    const buffer = Buffer.alloc(Math.min(stat.size, 2048));
+    fs.readSync(fd, buffer, 0, buffer.length, 0);
     fs.closeSync(fd);
+    fd = null;
 
     // PDF signature: %PDF (hex 25 50 44 46)
     if (buffer.subarray(0, 4).toString('ascii') === '%PDF') return true;
@@ -63,8 +65,14 @@ export function validateFileMagic(filePath: string): boolean {
     if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47 &&
         buffer[4] === 0x0D && buffer[5] === 0x0A && buffer[6] === 0x1A && buffer[7] === 0x0A) return true;
 
-    // Office Open XML / DOCX signature: PK\x03\x04
-    if (buffer[0] === 0x50 && buffer[1] === 0x4B && buffer[2] === 0x03 && buffer[3] === 0x04) return true;
+    // Office Open XML / DOCX signature: PK\x03\x04 and contains OpenXML structure ('[Content_Types].xml' or 'word/')
+    if (buffer[0] === 0x50 && buffer[1] === 0x4B && buffer[2] === 0x03 && buffer[3] === 0x04) {
+      const headerStr = buffer.toString('binary');
+      if (headerStr.includes('[Content_Types].xml') || headerStr.includes('word/')) {
+        return true;
+      }
+      return false; // Reject arbitrary zip files masquerading as docx
+    }
 
     // Legacy OLE2 Composite (DOC): D0 CF 11 E0 A1 B1 1A E1
     if (buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0) return true;
@@ -74,6 +82,10 @@ export function validateFileMagic(filePath: string): boolean {
     // Fail closed: reject file if header cannot be verified
     console.warn('File magic verification exception:', err);
     return false;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch (_) {}
+    }
   }
 }
 

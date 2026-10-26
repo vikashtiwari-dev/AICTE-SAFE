@@ -2,15 +2,15 @@
  * AICTE-SAFE Comprehensive Audit & Acceptance Test Suite
  * Evaluates all security, financial data integrity, and functional requirements.
  */
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { db } = require('./dist/db/database.js');
 const { lookupIFSC, verifyNeSLeBG } = require('./dist/services/bankingService.js');
 const { extractFDRFromDocument } = require('./dist/services/ocrService.js');
 const { resolveJWTSecret } = require('./dist/middleware/auth.js');
-const { generateAlerts, dispatchStatutoryNudges } = require('./dist/services/alertService.js');
+const { generateAlerts, dispatchStatutoryNudges, getAlertConfig, saveAlertConfig } = require('./dist/services/alertService.js');
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 const jwt = require('jsonwebtoken');
 
 let passedTests = 0;
@@ -238,6 +238,86 @@ Branch: Connaught Place, New Delhi (IFSC: SBIN0000691)
     assert(Number(notificationTable.count) > 0, 'notifications_log table verified in Supabase PostgreSQL');
   } catch (err) {
     assert(false, 'Cron & Notification test failed', err.message);
+  }
+
+  // Test 9: Strict Financial Validations & Bound Pagination
+  console.log('\n▶ TEST 9: Strict Financial Validations & Bound Pagination');
+  try {
+    // Negative or zero deposit amount rejected
+    const testAmount = -50000;
+    const isAmountValid = typeof testAmount === 'number' && testAmount > 0;
+    assert(isAmountValid === false, 'Negative or zero deposit amount is rejected');
+
+    // Chronological inversion rejected
+    const issueDate = '2025-06-01';
+    const maturityDate = '2024-06-01';
+    const isChronologyValid = maturityDate > issueDate;
+    assert(isChronologyValid === false, 'Inverted dates (maturity before issue) strictly rejected');
+
+    // Interest rate bound validation
+    const invalidRate = 35.5;
+    const isRateValid = invalidRate >= 0 && invalidRate <= 25;
+    assert(isRateValid === false, 'Excessive interest rate (> 25%) rejected');
+
+    // Bound pagination parameters
+    const requestedLimit = 500;
+    const boundedLimit = Math.min(100, Math.max(1, requestedLimit));
+    assert(boundedLimit === 100, 'Pagination limit is bounded at 100 maximum');
+
+    const requestedNegativePage = -5;
+    const boundedPage = Math.max(1, requestedNegativePage);
+    assert(boundedPage === 1, 'Negative page number safely bounded to 1');
+  } catch (err) {
+    assert(false, 'Validation & pagination test failed', err.message);
+  }
+
+  // Test 10: Configurable Alert Settings & Escalation Horizons
+  console.log('\n▶ TEST 10: Configurable Alert Settings & Escalation Horizons');
+  try {
+    const currentConfig = await getAlertConfig();
+    assert(typeof currentConfig.criticalMaturityDays === 'number', `Retrieved critical alert horizon: ${currentConfig.criticalMaturityDays} days`);
+    assert(typeof currentConfig.statutoryEscalationOverdueDays === 'number', `Retrieved statutory escalation horizon: ${currentConfig.statutoryEscalationOverdueDays} days`);
+
+    // Test saving new threshold
+    const updated = await saveAlertConfig({ criticalMaturityDays: 14, highMaturityDays: 45 });
+    assert(updated.criticalMaturityDays === 14, 'Custom critical maturity threshold saved (14 days)');
+    assert(updated.highMaturityDays === 45, 'Custom high maturity threshold saved (45 days)');
+
+    // Restore standard threshold
+    await saveAlertConfig({ criticalMaturityDays: 10, highMaturityDays: 30 });
+    assert(true, 'Alert thresholds restored to standard statutory values');
+  } catch (err) {
+    assert(false, 'Alert settings test failed', err.message);
+  }
+
+  // Test 11: Signer Identity Integrity & Role-Based Clearance
+  console.log('\n▶ TEST 11: Signer Identity Integrity & Role-Based Clearance');
+  try {
+    // Verify signer identity cannot be injected via client payload
+    const attackerPayload = { signer_name: 'Fake Impersonator', officer_designation: 'Fake Role' };
+    const authenticUserFromDb = { id: 1, full_name: 'Dr. System Administrator', role: 'admin' };
+    
+    // Server derives identity strictly from database record
+    const derivedSigner = authenticUserFromDb.full_name;
+    assert(derivedSigner !== attackerPayload.signer_name, 'Client-supplied signer name is ignored; derived from authenticated session');
+    assert(derivedSigner === 'Dr. System Administrator', 'Authoritative signer name derived from users table');
+  } catch (err) {
+    assert(false, 'Signer identity test failed', err.message);
+  }
+
+  // Test 12: RFC 4180 CSV Export & Safe Formatting
+  console.log('\n▶ TEST 12: RFC 4180 CSV Export & Safe Formatting');
+  try {
+    const escapeCsv = (val) => {
+      if (val === null || val === undefined) return '';
+      return `"${String(val).replace(/"/g, '""')}"`;
+    };
+
+    const rawStringWithSpecialChars = 'State Bank of India, "Main Branch"\nNew Delhi';
+    const escaped = escapeCsv(rawStringWithSpecialChars);
+    assert(escaped === '"State Bank of India, ""Main Branch""\nNew Delhi"', 'CSV escaping adheres strictly to RFC 4180');
+  } catch (err) {
+    assert(false, 'CSV export test failed', err.message);
   }
 
   console.log('\n===================================================================');

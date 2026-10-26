@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import { db, executeMutation } from '../db/database';
 import { authenticate, requireRole, AuthRequest, maskAccountNumber } from '../middleware/auth';
 import { upload, validateFileMagic } from '../middleware/upload';
@@ -14,7 +15,15 @@ const router = express.Router();
 router.post('/ocr-extract', authenticate, upload.single('file'), async (req: AuthRequest, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG, DOCX)' });
+      return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG)' });
+    }
+
+    const ext = path.extname(req.file.originalname).toLowerCase();
+    if (ext === '.docx' || ext === '.doc') {
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(400).json({
+        error: 'Automated OCR extraction supports PDF and image certificates. For DOCX files, please convert to PDF or enter details manually.'
+      });
     }
 
     if (!validateFileMagic(req.file.path)) {
@@ -30,7 +39,7 @@ router.post('/ocr-extract', authenticate, upload.single('file'), async (req: Aut
     const extracted = await extractFDRFromDocument(req.file.path, submittedData);
     return res.json(extracted);
   } catch (err: any) {
-    return res.status(500).json({ error: 'OCR Extraction failed', details: err.message });
+    return res.status(500).json({ error: 'OCR Extraction failed' });
   }
 });
 
@@ -96,10 +105,12 @@ router.post('/aph-calculate', authenticate, (req: AuthRequest, res) => {
   return res.json(result);
 });
 
-// GET /api/fdrs - List with strict institution isolation
+// GET /api/fdrs - List with strict institution isolation & bounded pagination
 router.get('/', authenticate, async (req: AuthRequest, res) => {
   const { status, verification_status, institution_id, search, page = '1', limit = '20', deposit_type } = req.query;
-  const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+  const safePage = Math.max(1, parseInt(page as string) || 1);
+  const safeLimit = Math.min(100, Math.max(1, parseInt(limit as string) || 20));
+  const offset = (safePage - 1) * safeLimit;
 
   let whereClause = 'WHERE 1=1';
   const params: any[] = [];
@@ -142,7 +153,7 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
     ${whereClause}
     ORDER BY f.submitted_at DESC
     LIMIT ? OFFSET ?
-  `).all(...params, parseInt(limit as string), offset) as any[];
+  `).all(...params, safeLimit, offset) as any[];
 
   // Apply DPDP Act 2023 compliant sensitive account masking
   const maskedFdrs = fdrs.map(f => ({
@@ -155,9 +166,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
   return res.json({
     data: maskedFdrs,
     total: totalCount,
-    page: parseInt(page as string),
-    limit: parseInt(limit as string),
-    totalPages: Math.ceil(totalCount / parseInt(limit as string)),
+    page: safePage,
+    limit: safeLimit,
+    totalPages: Math.ceil(totalCount / safeLimit),
   });
 });
 
@@ -210,8 +221,28 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
 router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), async (req: AuthRequest, res) => {
   const { institution_id, fdr_number, bank_name, bank_branch, account_number, deposit_amount, issue_date, maturity_date, interest_rate, deposit_type, purpose, remarks, is_renewal, parent_fdr_id } = req.body;
 
-  if (!fdr_number || !bank_name || !deposit_amount || !issue_date || !maturity_date) {
+  if (!fdr_number || !bank_name || deposit_amount === undefined || deposit_amount === null || !issue_date || !maturity_date) {
     return res.status(400).json({ error: 'Required fields missing (FDR Number, Bank Name, Deposit Amount, Issue Date, Maturity Date)' });
+  }
+
+  // Financial validation: deposit_amount must be strictly positive
+  const numAmount = parseFloat(deposit_amount);
+  if (isNaN(numAmount) || numAmount <= 0) {
+    return res.status(400).json({ error: 'Deposit amount must be a positive numeric value greater than zero.' });
+  }
+
+  // Chronological validation: maturity date must strictly succeed issue date
+  if (issue_date >= maturity_date) {
+    return res.status(400).json({ error: 'Maturity date must be chronologically after the issue date.' });
+  }
+
+  // Interest rate bounds: 0% to 25% per annum
+  let parsedRate: number | null = null;
+  if (interest_rate !== undefined && interest_rate !== null && interest_rate !== '') {
+    parsedRate = parseFloat(interest_rate);
+    if (isNaN(parsedRate) || parsedRate < 0 || parsedRate > 25) {
+      return res.status(400).json({ error: 'Interest rate must be a realistic percentage between 0% and 25% per annum.' });
+    }
   }
 
   // Strictly enforce institution ownership: an institution_user CANNOT create FDRs for other institutions
@@ -256,7 +287,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Verification', 'Unverified')
       `, [
         targetInstitutionId, fdr_number.trim().toUpperCase(), bank_name.trim(), bank_branch || null, account_number || null,
-        parseFloat(deposit_amount), issue_date, maturity_date, interest_rate ? parseFloat(interest_rate) : null,
+        numAmount, issue_date, maturity_date, parsedRate,
         deposit_type || 'FDR', purpose || null, remarks || null,
         is_renewal ? 1 : 0, parent_fdr_id || null,
         req.user!.userId, req.user!.userId
@@ -265,7 +296,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
       await tx.execute(`
         INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
         VALUES ('FDR', ?, 'Created', ?, ?, ?)
-      `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ fdr_number, deposit_amount, status: 'Pending Verification' }), 'New regulatory instrument submitted']);
+      `, [result.lastInsertRowid, req.user!.userId, JSON.stringify({ fdr_number, deposit_amount: numAmount, status: 'Pending Verification' }), 'New regulatory instrument submitted']);
 
       return await tx.queryOne('SELECT * FROM fdrs WHERE id = ?', [result.lastInsertRowid]);
     });
@@ -275,7 +306,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
     if (err.message && err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: `FDR number "${fdr_number}" already exists in the national database.` });
     }
-    return res.status(500).json({ error: 'Failed to create FDR in cloud database', details: err.message });
+    return res.status(500).json({ error: 'Failed to create FDR in cloud database' });
   }
 });
 
@@ -366,9 +397,9 @@ router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async
   }
 });
 
-// PATCH /api/fdrs/:id/verify - Strictly enforce verification policy & require uploaded evidence
+// PATCH /api/fdrs/:id/verify - Strictly enforce verification policy & require uploaded evidence & method
 router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
-  const { verification_status, verification_notes } = req.body;
+  const { verification_status, verification_notes, verification_method } = req.body;
   const fdr = await db.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
@@ -377,8 +408,20 @@ router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer'
     return res.status(400).json({ error: `Invalid verification status. Must be one of: ${allowedStatuses.join(', ')}` });
   }
 
-  // Require documented evidence before granting Verified status
+  // Require documented evidence and explicit verification method before granting Verified status
   if (verification_status === 'Verified') {
+    if (!verification_method || typeof verification_method !== 'string' || verification_method.trim().length < 3) {
+      return res.status(400).json({
+        error: 'Verification method is mandatory when approving an instrument (e.g. PHYSICAL_INSPECTION, BANK_CONFIRMATION_LETTER, NESL_EBG, SFMS_IFN760, BANK_PORTAL_API, OFFICER_MANUAL_SCRUTINY).'
+      });
+    }
+
+    if (!verification_notes || verification_notes.trim().length < 10) {
+      return res.status(400).json({
+        error: 'Substantive scrutiny notes (minimum 10 characters) detailing the verification evidence are required.'
+      });
+    }
+
     const docCountRow = await db.queryOne(
       'SELECT COUNT(*) as count FROM fdr_documents WHERE fdr_id = ? AND is_active = 1',
       [fdr.id]
@@ -415,7 +458,7 @@ router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer'
         req.params.id, req.user!.userId,
         verification_status === 'Verified' ? 'Verification Approved' : 'Discrepancy Flagged',
         JSON.stringify({ verification_status: fdr.verification_status }),
-        JSON.stringify({ verification_status, notes: verification_notes }),
+        JSON.stringify({ verification_status, verification_method: verification_method || 'MANUAL', notes: verification_notes }),
         verification_notes || `Status marked as ${verification_status}`
       ]);
 
@@ -428,9 +471,9 @@ router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer'
       }
     });
 
-    return res.json({ success: true, verification_status, fdr_status: newFdrStatus });
+    return res.json({ success: true, verification_status, fdr_status: newFdrStatus, verification_method });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Verification update failed', details: err.message });
+    return res.status(500).json({ error: 'Verification update failed' });
   }
 });
 
@@ -565,6 +608,28 @@ router.post('/:id/renew', authenticate, requireRole(['admin', 'bureau_officer', 
     return res.status(400).json({ error: 'Required fields: Renewal FDR Number, Issue Date, Maturity Date' });
   }
 
+  if (issue_date >= maturity_date) {
+    return res.status(400).json({ error: 'Renewal maturity date must be chronologically after the issue date.' });
+  }
+
+  let renewalDepositAmount = parentFdr.deposit_amount;
+  if (deposit_amount !== undefined && deposit_amount !== null && deposit_amount !== '') {
+    const numDep = parseFloat(deposit_amount);
+    if (isNaN(numDep) || numDep <= 0) {
+      return res.status(400).json({ error: 'Deposit amount must be a positive numeric value.' });
+    }
+    renewalDepositAmount = numDep;
+  }
+
+  let renewalRate = parentFdr.interest_rate;
+  if (interest_rate !== undefined && interest_rate !== null && interest_rate !== '') {
+    const numRate = parseFloat(interest_rate);
+    if (isNaN(numRate) || numRate < 0 || numRate > 25) {
+      return res.status(400).json({ error: 'Interest rate must be between 0% and 25% per annum.' });
+    }
+    renewalRate = numRate;
+  }
+
   try {
     const renewed = await db.transaction(async (tx) => {
       const result = await tx.execute(`
@@ -575,8 +640,8 @@ router.post('/:id/renew', authenticate, requireRole(['admin', 'bureau_officer', 
       `, [
         parentFdr.institution_id, fdr_number.trim().toUpperCase(), bank_name || parentFdr.bank_name,
         bank_branch || parentFdr.bank_branch, account_number || parentFdr.account_number,
-        deposit_amount ? parseFloat(deposit_amount) : parentFdr.deposit_amount, issue_date, maturity_date,
-        interest_rate ? parseFloat(interest_rate) : parentFdr.interest_rate, parentFdr.deposit_type,
+        renewalDepositAmount, issue_date, maturity_date,
+        renewalRate, parentFdr.deposit_type,
         `Renewal of parent instrument ${parentFdr.fdr_number}`,
         req.user!.userId, req.user!.userId, parentFdr.id
       ]);
@@ -597,8 +662,61 @@ router.post('/:id/renew', authenticate, requireRole(['admin', 'bureau_officer', 
     if (err.message && err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'Renewal FDR number already exists' });
     }
-    return res.status(500).json({ error: 'Failed to create renewal in cloud database', details: err.message });
+    return res.status(500).json({ error: 'Failed to create renewal in cloud database' });
   }
+});
+
+// GET /api/fdrs/:id/history - Full chain of instruments (original -> renewals) and document versions
+router.get('/:id/history', authenticate, async (req: AuthRequest, res) => {
+  const currentFdr = await db.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]) as any;
+  if (!currentFdr) return res.status(404).json({ error: 'FDR not found' });
+
+  if (req.user!.role === 'institution_user' && currentFdr.institution_id !== req.user!.institution_id) {
+    return res.status(403).json({ error: 'Forbidden: Clearance not granted for this institutional instrument.' });
+  }
+
+  // 1. Trace lineage upward to root predecessor
+  const lineage: any[] = [];
+  let curr = currentFdr;
+  while (curr.parent_fdr_id) {
+    const parent = await db.queryOne('SELECT id, fdr_number, bank_name, deposit_amount, issue_date, maturity_date, status, is_renewal, parent_fdr_id, submitted_at FROM fdrs WHERE id = ?', [curr.parent_fdr_id]) as any;
+    if (!parent) break;
+    lineage.unshift(parent);
+    curr = parent;
+  }
+  lineage.push({
+    id: currentFdr.id,
+    fdr_number: currentFdr.fdr_number,
+    bank_name: currentFdr.bank_name,
+    deposit_amount: currentFdr.deposit_amount,
+    issue_date: currentFdr.issue_date,
+    maturity_date: currentFdr.maturity_date,
+    status: currentFdr.status,
+    is_renewal: currentFdr.is_renewal,
+    parent_fdr_id: currentFdr.parent_fdr_id,
+    submitted_at: currentFdr.submitted_at,
+    is_current: true
+  });
+
+  // 2. Trace downstream renewals spawned from this instrument
+  const downstream = await db.query('SELECT id, fdr_number, bank_name, deposit_amount, issue_date, maturity_date, status, is_renewal, parent_fdr_id, submitted_at FROM fdrs WHERE parent_fdr_id = ? ORDER BY issue_date ASC', [currentFdr.id]) as any[];
+
+  // 3. Document version history across all attached documents
+  const documentVersions = await db.query(`
+    SELECT d.id, d.fdr_id, d.document_type, d.file_name, d.file_size, d.mime_type, d.sha256_hash, d.version, d.is_active, d.uploaded_at, u.full_name as uploaded_by_name
+    FROM fdr_documents d
+    LEFT JOIN users u ON d.uploaded_by = u.id
+    WHERE d.fdr_id = ?
+    ORDER BY d.document_type ASC, d.version DESC, d.uploaded_at DESC
+  `, [currentFdr.id]) as any[];
+
+  return res.json({
+    fdr_id: currentFdr.id,
+    fdr_number: currentFdr.fdr_number,
+    lineage_chain: lineage,
+    downstream_renewals: downstream,
+    document_versions: documentVersions
+  });
 });
 
 export default router;

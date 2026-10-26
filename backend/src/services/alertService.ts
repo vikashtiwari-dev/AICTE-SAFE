@@ -14,8 +14,49 @@ export const DEFAULT_ALERT_CONFIG: AlertConfig = {
   statutoryEscalationOverdueDays: 30,
 };
 
+export async function getAlertConfig(): Promise<AlertConfig> {
+  try {
+    const row = await db.queryOne("SELECT setting_value FROM system_settings WHERE setting_key = 'ALERT_CONFIG'") as any;
+    if (row && row.setting_value) {
+      return { ...DEFAULT_ALERT_CONFIG, ...JSON.parse(row.setting_value) };
+    }
+  } catch (_) {}
+  return { ...DEFAULT_ALERT_CONFIG };
+}
+
+export async function saveAlertConfig(newConfig: Partial<AlertConfig>, userId?: number): Promise<AlertConfig> {
+  const merged: AlertConfig = {
+    criticalMaturityDays: Number(newConfig.criticalMaturityDays) || DEFAULT_ALERT_CONFIG.criticalMaturityDays,
+    highMaturityDays: Number(newConfig.highMaturityDays) || DEFAULT_ALERT_CONFIG.highMaturityDays,
+    mediumMaturityDays: Number(newConfig.mediumMaturityDays) || DEFAULT_ALERT_CONFIG.mediumMaturityDays,
+    statutoryEscalationOverdueDays: Number(newConfig.statutoryEscalationOverdueDays) || DEFAULT_ALERT_CONFIG.statutoryEscalationOverdueDays,
+  };
+
+  try {
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        setting_key VARCHAR(100) PRIMARY KEY,
+        setting_value TEXT,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_by INTEGER
+      )
+    `);
+    const exists = await db.queryOne('SELECT setting_key FROM system_settings WHERE setting_key = ?', ['ALERT_CONFIG']);
+    if (exists) {
+      await db.execute('UPDATE system_settings SET setting_value = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ? WHERE setting_key = ?', [JSON.stringify(merged), userId || null, 'ALERT_CONFIG']);
+    } else {
+      await db.execute('INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?)', ['ALERT_CONFIG', JSON.stringify(merged), userId || null]);
+    }
+  } catch (err: any) {
+    console.warn('saveAlertConfig database warning:', err.message);
+  }
+
+  return merged;
+}
+
 export async function generateAlerts(customConfig?: Partial<AlertConfig>): Promise<number> {
-  const config = { ...DEFAULT_ALERT_CONFIG, ...customConfig };
+  const baseConfig = await getAlertConfig();
+  const config = { ...baseConfig, ...customConfig };
   const today = new Date();
 
   // Get all active FDRs

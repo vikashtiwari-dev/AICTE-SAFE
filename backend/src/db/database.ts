@@ -3,6 +3,8 @@ import fs from 'fs';
 import { Pool, PoolClient } from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 export interface DBStatement {
   all(...params: any[]): Promise<any[]>;
@@ -40,20 +42,13 @@ const rawDbUrl =
 
 if (rawDbUrl) {
   try {
-    let cleanDbUrl = rawDbUrl;
-    try {
-      const u = new URL(rawDbUrl);
-      u.search = '';
-      cleanDbUrl = u.toString();
-    } catch (_) {}
-
-    // Secure database connection without disabling global process TLS verification
+    // Preserve necessary URL parameters (e.g., pgbouncer=true, sslmode) and configure TLS explicitly
     const sslConfig = process.env.DATABASE_CA
       ? { ca: process.env.DATABASE_CA, rejectUnauthorized: true }
       : { rejectUnauthorized: false };
 
     pgPool = new Pool({
-      connectionString: cleanDbUrl,
+      connectionString: rawDbUrl,
       ssl: sslConfig,
       max: 10,
       idleTimeoutMillis: 30000,
@@ -550,5 +545,40 @@ export async function initializeDatabase() {
     }
   } else {
     console.log('ℹ️ Offline SQLite fallback initialized (PostgreSQL not detected in environment).');
+    try {
+      const sqlite = getSqliteFallback();
+      sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS consumed_view_tokens (
+          token_jti TEXT PRIMARY KEY,
+          document_id INTEGER,
+          consumed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS system_settings (
+          setting_key TEXT PRIMARY KEY,
+          setting_value TEXT,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_by INTEGER
+        );
+        CREATE TABLE IF NOT EXISTS notifications_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          institution_id INTEGER,
+          fdr_id INTEGER,
+          notification_type TEXT NOT NULL,
+          channel TEXT NOT NULL DEFAULT 'EMAIL',
+          recipient TEXT NOT NULL,
+          subject TEXT,
+          message TEXT NOT NULL,
+          recipient_role TEXT,
+          recipient_contact TEXT,
+          message_body TEXT,
+          days_before_maturity INTEGER,
+          delivery_status TEXT DEFAULT 'Delivered',
+          status TEXT DEFAULT 'SENT',
+          sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } catch (sqliteErr: any) {
+      console.warn('SQLite fallback table creation notice:', sqliteErr.message);
+    }
   }
 }

@@ -54,7 +54,7 @@ export async function lookupIFSC(code: string) {
       requires_manual_verification: true,
       verification_status_label: 'Rejected — Invalid Length',
       ifsc: clean,
-      source: 'OFFICIAL_RESERVE_BANK_OF_INDIA_IFSC_DIRECTORY',
+      source: 'RAZORPAY_OPEN_IFSC_DIRECTORY_MIRROR',
       error: 'IFSC must be exactly 11 alphanumeric characters (e.g. SBIN0001234)'
     };
   }
@@ -67,7 +67,7 @@ export async function lookupIFSC(code: string) {
       requires_manual_verification: true,
       verification_status_label: 'Rejected — 5th Char Must Be 0',
       ifsc: clean,
-      source: 'OFFICIAL_RESERVE_BANK_OF_INDIA_IFSC_DIRECTORY',
+      source: 'RAZORPAY_OPEN_IFSC_DIRECTORY_MIRROR',
       error: 'Invalid IFSC format: The 5th character must be zero (0) as per RBI standards'
     };
   }
@@ -80,15 +80,15 @@ export async function lookupIFSC(code: string) {
       valid: false,
       live_bank_confirmed: false,
       requires_manual_verification: true,
-      verification_status_label: 'Rejected — Unrecognized Prefix',
+      verification_status_label: 'Rejected — Unrecognized Bank Code Prefix',
       ifsc: clean,
-      source: 'OFFICIAL_RESERVE_BANK_OF_INDIA_IFSC_DIRECTORY',
+      source: 'RAZORPAY_OPEN_IFSC_DIRECTORY_MIRROR',
       error: `Unrecognized Bank Code "${prefix}". This bank prefix is not registered in the National RBI Scheduled Commercial Banks Directory for AICTE approved security deposits.`,
       resolution: 'Please verify the IFSC code printed on your official Fixed Deposit Receipt.'
     };
   }
 
-  // Attempt real-time lookup against official National IFSC clearing registry
+  // Attempt real-time lookup against public IFSC clearing directory mirror
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 3500);
@@ -103,7 +103,7 @@ export async function lookupIFSC(code: string) {
         valid: true,
         live_bank_confirmed: true,
         requires_manual_verification: false,
-        verification_status_label: 'Bank Confirmed via RBI Directory',
+        verification_status_label: 'Third-Party Directory Confirmed (Razorpay Public Mirror of RBI Master Directory)',
         ifsc: clean,
         bank_name: data.BANK || scheduledBank.bank,
         bank_branch: data.BRANCH || 'Branch Verified',
@@ -115,40 +115,43 @@ export async function lookupIFSC(code: string) {
         rtgs_enabled: Boolean(data.RTGS),
         neft_enabled: Boolean(data.NEFT),
         rbi_clearing_eligible: scheduledBank.rbiEligible,
-        verification_tier: 'LIVE_RBI_DIRECTORY_VERIFIED',
-        source: 'OFFICIAL_RESERVE_BANK_OF_INDIA_IFSC_DIRECTORY',
-        regulatory_notes: `${data.BANK || scheduledBank.bank} is an authorized Scheduled Bank eligible for AICTE Approval Process security deposit instruments.`
+        verification_tier: 'THIRD_PARTY_DIRECTORY_CONFIRMED',
+        source: 'RAZORPAY_OPEN_IFSC_DIRECTORY_MIRROR',
+        regulatory_notes: `Branch details matched via Razorpay open IFSC directory mirror. ${data.BANK || scheduledBank.bank} is a recognized Scheduled Bank.`
       };
     } else if (response.status === 404) {
       return {
         valid: false,
         live_bank_confirmed: false,
         requires_manual_verification: true,
-        verification_status_label: 'Rejected — Nonexistent RBI Branch Code',
+        verification_status_label: 'Rejected — Branch Code Not Found in Directory',
         ifsc: clean,
-        source: 'OFFICIAL_RESERVE_BANK_OF_INDIA_IFSC_DIRECTORY',
-        error: `IFSC code "${clean}" does not exist in the National Reserve Bank of India (RBI) clearing database. The 7-character branch identifier is invalid.`,
+        source: 'RAZORPAY_OPEN_IFSC_DIRECTORY_MIRROR',
+        error: `IFSC code "${clean}" does not exist in the National IFSC clearing directory mirror. The 7-character branch identifier is invalid.`,
         resolution: 'Please verify the 11-digit IFSC code with your issuing bank branch.'
       };
     }
   } catch (_) {
-    // Offline / timeout fallback using authoritative prefix registry
+    // External directory service unreachable or timed out
   }
 
-  // Offline fallback when network is unavailable - strictly labeled as unverified branch requiring manual scrutiny
+  // Offline fallback when network is unavailable - strictly return UNVERIFIED_OFFLINE
+  // Never mark complete IFSC as valid based on prefix alone!
   return {
-    valid: true,
+    valid: false,
     live_bank_confirmed: false,
     requires_manual_verification: true,
-    verification_status_label: 'Format Validated — Manual Verification Required',
+    verification_status_label: 'Verification Unavailable — Offline Prefix Check Only',
+    status: 'UNVERIFIED_OFFLINE',
     ifsc: clean,
     bank_name: scheduledBank.bank,
     bank_branch: null,
     bank_category: scheduledBank.category,
     rbi_clearing_eligible: scheduledBank.rbiEligible,
-    verification_tier: 'OFFLINE_PREFIX_CHECK_NOT_LIVE_VERIFIED',
-    source: 'OFFICIAL_RESERVE_BANK_OF_INDIA_IFSC_DIRECTORY',
-    regulatory_notes: `${scheduledBank.bank} prefix is an authorized Scheduled Commercial Bank prefix. Live branch confirmation was not completed (offline fallback); manual branch verification is mandatory.`
+    verification_tier: 'VERIFICATION_UNAVAILABLE_OFFLINE',
+    source: 'LOCAL_SCHEDULED_BANK_PREFIX_REGISTRY',
+    error: `Real-time branch directory verification unavailable. While "${prefix}" is an authentic Scheduled Commercial Bank prefix, the 7-character branch code could not be verified. Manual bank confirmation is mandatory.`,
+    regulatory_notes: 'System is operating in offline mode. Full 11-character IFSC validation requires live directory lookup.'
   };
 }
 

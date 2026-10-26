@@ -1,7 +1,7 @@
 import express from 'express';
 import { db } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { generateAlerts, dispatchStatutoryNudges } from '../services/alertService';
+import { generateAlerts, dispatchStatutoryNudges, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
 
 const router = express.Router();
 
@@ -114,10 +114,69 @@ router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer
   }
 });
 
+// GET /api/alerts/settings - Retrieve current maturity horizons and statutory escalation configuration
+router.get('/settings', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
+  try {
+    const config = await getAlertConfig();
+    return res.json({
+      config,
+      default_config: DEFAULT_ALERT_CONFIG,
+      description: 'Configurable maturity reminder horizons and statutory escalation overdue windows'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to retrieve alert settings' });
+  }
+});
+
+// PUT /api/alerts/settings - Update maturity horizons (Administrator only)
+router.put('/settings', authenticate, requireRole(['admin']), async (req: AuthRequest, res) => {
+  const { criticalMaturityDays, highMaturityDays, mediumMaturityDays, statutoryEscalationOverdueDays } = req.body;
+
+  if (criticalMaturityDays !== undefined && (isNaN(Number(criticalMaturityDays)) || Number(criticalMaturityDays) < 1 || Number(criticalMaturityDays) > 30)) {
+    return res.status(400).json({ error: 'criticalMaturityDays must be between 1 and 30 days.' });
+  }
+  if (highMaturityDays !== undefined && (isNaN(Number(highMaturityDays)) || Number(highMaturityDays) < 5 || Number(highMaturityDays) > 90)) {
+    return res.status(400).json({ error: 'highMaturityDays must be between 5 and 90 days.' });
+  }
+  if (mediumMaturityDays !== undefined && (isNaN(Number(mediumMaturityDays)) || Number(mediumMaturityDays) < 15 || Number(mediumMaturityDays) > 180)) {
+    return res.status(400).json({ error: 'mediumMaturityDays must be between 15 and 180 days.' });
+  }
+  if (statutoryEscalationOverdueDays !== undefined && (isNaN(Number(statutoryEscalationOverdueDays)) || Number(statutoryEscalationOverdueDays) < 1 || Number(statutoryEscalationOverdueDays) > 120)) {
+    return res.status(400).json({ error: 'statutoryEscalationOverdueDays must be between 1 and 120 days.' });
+  }
+
+  try {
+    const saved = await saveAlertConfig({
+      criticalMaturityDays,
+      highMaturityDays,
+      mediumMaturityDays,
+      statutoryEscalationOverdueDays,
+    }, req.user!.userId);
+
+    // Record change in audit trail
+    await db.execute(`
+      INSERT INTO audit_log (entity_type, entity_id, action, changed_by, new_value, notes)
+      VALUES ('SystemSetting', 0, 'Alert Thresholds Updated', ?, ?, 'Administrator updated maturity alert thresholds')
+    `, [req.user!.userId, JSON.stringify(saved)]);
+
+    return res.json({
+      success: true,
+      config: saved,
+      message: 'Maturity alert horizon thresholds and statutory escalation settings successfully updated.'
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to update alert settings' });
+  }
+});
+
 // POST /api/alerts/generate - Manual trigger
 router.post('/generate', authenticate, requireRole(['admin', 'bureau_officer']), async (_req: AuthRequest, res) => {
-  const count = await generateAlerts();
-  return res.json({ success: true, newAlerts: count });
+  try {
+    const count = await generateAlerts();
+    return res.json({ success: true, newAlerts: count });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Alert generation failed' });
+  }
 });
 
 export default router;

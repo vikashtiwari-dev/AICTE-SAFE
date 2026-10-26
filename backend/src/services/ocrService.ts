@@ -17,6 +17,8 @@ export interface ExtractedFDRData {
   deposit_type: string;
   has_joint_lien_clause: boolean;
   confidence_score: number; // 0.0 to 100.0 computed from genuine evidence
+  confidence_metric_label?: string;
+  engine_measured_confidence?: number | null;
   extraction_status: 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' | 'OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED' | 'INSUFFICIENT_DATA_UNREADABLE';
   verification_tier: 'OCR_EXTRACTED_NOT_BANK_VERIFIED';
   extracted_fields: Record<string, { value: any; confidence: number; source: string }>;
@@ -106,7 +108,9 @@ export async function extractFDRFromDocument(
   const isPdf = fileBuffer.slice(0, 4).toString() === '%PDF';
   const isImage = fileBuffer.slice(0, 2).toString('hex') === 'ffd8' || fileBuffer.slice(0, 4).toString('hex') === '89504e47';
 
-  // 1. Genuine PDF Text & Page Rendering
+  let engineMeasuredConfidence: number | null = null;
+
+  // 1. Genuine PDF Text Token Parsing
   if (isPdf) {
     try {
       const parser = new PDFParse({ data: fileBuffer });
@@ -114,35 +118,36 @@ export async function extractFDRFromDocument(
       fileText = pdfData?.text || '';
       try { await parser.destroy(); } catch (_) {}
       engineUsed = 'PDF_Binary_Token_Stream';
+      if (fileText.trim().length >= 20) {
+        engineMeasuredConfidence = 100; // Exact digital vector font extraction
+      }
     } catch (pdfErr) {
       console.warn('PDF stream parse warning:', pdfErr);
     }
   }
 
-  // 2. If image or scanned PDF with sparse textual stream, execute neural OCR
-  if ((isImage || (isPdf && fileText.trim().length < 50)) && fileBuffer.length > 0) {
+  // 2. Neural OCR for raster images (PNG, JPEG)
+  if (isImage && fileBuffer.length > 0) {
     try {
       const worker = await createWorker('eng');
       const ret = await worker.recognize(filePath);
-      if (ret.data && ret.data.text && ret.data.text.trim().length > fileText.trim().length) {
+      if (ret.data && ret.data.text && ret.data.text.trim().length > 0) {
         fileText = ret.data.text;
         engineUsed = 'Tesseract_v5_Neural_OCR';
+        engineMeasuredConfidence = Math.round(ret.data.confidence || 0);
       }
       await worker.terminate();
     } catch (ocrErr: any) {
       console.warn('Tesseract OCR notice:', ocrErr.message);
-      // Fallback to buffer string scan if OCR process restricted
-      if (!fileText) {
-        fileText = fileBuffer.toString('utf-8', 0, Math.min(fileBuffer.length, 120000));
-        engineUsed = 'Hybrid_Fallback';
-      }
     }
   }
 
-  // 3. Document text stream for text files or hybrid fallback
-  if (!fileText || fileText.trim().length === 0) {
+  // 3. Fallback ONLY for plaintext document formats (e.g. .txt test fixtures)
+  // Never scan raw binary data as UTF-8 if PDF or image extraction fails
+  if (!fileText && !isPdf && !isImage) {
     fileText = fileBuffer.toString('utf-8', 0, Math.min(fileBuffer.length, 120000));
-    if (!engineUsed) engineUsed = 'Hybrid_Fallback';
+    engineUsed = 'Hybrid_Fallback';
+    engineMeasuredConfidence = 85;
   }
 
   // 4. Bank Matching (Strict regex against authoritative Scheduled Banks)
@@ -194,13 +199,13 @@ export async function extractFDRFromDocument(
 
   // 6. Pattern Extraction
   const fdrMatch = fileText.match(/(?:fdr|receipt|tdr|stdr|term\s*deposit|certificate)\s*(?:certificate)?\s*(?:no|number|ref|id|code)?[:.\s-]*([A-Za-z0-9\/-]{6,30})/i);
-  const amountMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)[:.\s]*(?:rs\.?|inr|₹)?[:.\s]*([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{2})?)/i);
+  const amountMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)[:.\s]*(?:rs\.?|inr|₹)?[:.\s]*([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{2})?|[0-9]+(?:\.[0-9]{2})?)/i);
   const ifscMatch = fileText.match(/\b([A-Z]{4}0[A-Z0-9]{6})\b/);
   const accountMatch = fileText.match(/(?:a\/c|account|acct|lien\s*account)\s*(?:no|number)?[:.\s]*([0-9]{9,18})/i);
   const rateMatch = fileText.match(/([0-9]{1,2}(?:\.[0-9]{1,2})?)\s*%\s*(?:p\.?a\.?|per\s*annum)?/i);
 
-  // AICTE Mandatory Lien Endorsement
-  const lienRegex = /(?:lien\s*in\s*favour\s*of\s*aicte|pledged\s*to\s*aicte|all\s*india\s*council\s*for\s*technical\s*education|joint\s*lien|marked\s*lien)/i;
+  // AICTE Mandatory Lien Endorsement (Requires explicit lien action verbs with AICTE)
+  const lienRegex = /(?:(?:joint\s*lien|lien\s*marked|lien\s*noted|pledged)\s*(?:in\s*favo(?:u)?r\s*of|to|with)?\s*(?:the\s*)?(?:aicte|all\s*india\s*council\s*for\s*technical\s*education)|lien\s*in\s*favo(?:u)?r\s*of\s*(?:the\s*)?(?:aicte|all\s*india\s*council\s*for\s*technical\s*education)|pledged\s*to\s*(?:the\s*)?(?:aicte|all\s*india\s*council\s*for\s*technical\s*education))/i;
   const hasJointLienClause = lienRegex.test(fileText);
 
   // Extract Dates and Normalize
@@ -336,7 +341,12 @@ export async function extractFDRFromDocument(
     }
   }
 
-  const confidenceScore = Math.max(0, Math.min(100, Math.round(evidencePoints)));
+  let combinedConfidence = evidencePoints;
+  if (engineMeasuredConfidence !== null) {
+    // Corroborate token completeness with engine-measured character recognition confidence
+    combinedConfidence = Math.round((evidencePoints * 0.6) + (engineMeasuredConfidence * 0.4));
+  }
+  const confidenceScore = Math.max(0, Math.min(100, Math.round(combinedConfidence)));
 
   // 7. Status and Human Review Routing
   let extractionStatus: 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' | 'OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED' | 'INSUFFICIENT_DATA_UNREADABLE';
@@ -367,6 +377,8 @@ export async function extractFDRFromDocument(
     deposit_type: 'FDR',
     has_joint_lien_clause: hasJointLienClause,
     confidence_score: confidenceScore,
+    confidence_metric_label: 'Heuristic Evidence Score (Corroborated OCR Extraction)',
+    engine_measured_confidence: engineMeasuredConfidence,
     extraction_status: extractionStatus,
     verification_tier: 'OCR_EXTRACTED_NOT_BANK_VERIFIED',
     extracted_fields: extractedFields,

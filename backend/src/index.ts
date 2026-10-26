@@ -56,8 +56,30 @@ app.use('/api', apiLimiter);
 // PRIVATE DOCUMENT STORAGE: All document access must traverse authenticated streaming route /api/documents/stream/:id
 // Public static access to /uploads is disabled to protect confidential financial records.
 
-// Initialize DB schema
-initializeDatabase();
+// Gate all requests on awaited database initialization to prevent cold-start race conditions
+let dbInitPromise: Promise<void> | null = null;
+export function ensureDbInitialized(): Promise<void> {
+  if (!dbInitPromise) {
+    dbInitPromise = initializeDatabase().catch(err => {
+      console.error('🚨 Fatal Database Initialization Failure:', err);
+      dbInitPromise = null; // allow retry on next invocation
+      throw err;
+    });
+  }
+  return dbInitPromise;
+}
+
+app.use(async (_req, res, next) => {
+  try {
+    await ensureDbInitialized();
+    next();
+  } catch (err: any) {
+    return res.status(503).json({
+      error: 'Service Unavailable: Database initialization in progress or failed to connect to authoritative store.',
+      status: 'INITIALIZATION_FAILED'
+    });
+  }
+});
 
 // API Routes
 app.use('/api/auth', authRoutes);
@@ -89,9 +111,13 @@ if (fs.existsSync(frontendDist)) {
 
 // Start server if not imported as serverless handler
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 AICTE SAFE Engine running on http://0.0.0.0:${PORT}`);
-    startCronJobs();
+  ensureDbInitialized().then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 AICTE SAFE Engine running on http://0.0.0.0:${PORT}`);
+      startCronJobs();
+    });
+  }).catch((err) => {
+    console.error('Fatal initialization error:', err);
   });
 }
 

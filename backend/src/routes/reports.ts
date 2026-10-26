@@ -1,6 +1,6 @@
 import express from 'express';
 import { db } from '../db/database';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, maskAccountNumber } from '../middleware/auth';
 
 const router = express.Router();
 
@@ -280,6 +280,101 @@ router.get('/compliance-health/:id', authenticate, async (req: AuthRequest, res)
     action_items: actionItems,
     evaluated_at: new Date().toISOString()
   });
+});
+
+// GET /api/reports/export-csv - RFC 4180 Compliant CSV Export with Strict Role Masking & Isolation
+router.get('/export-csv', authenticate, async (req: AuthRequest, res) => {
+  const { status, verification_status, deposit_type } = req.query;
+
+  let whereClause = 'WHERE 1=1';
+  const params: any[] = [];
+
+  // Fail-Closed Institution Isolation
+  if (req.user!.role === 'institution_user') {
+    if (!req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: User is not linked to any registered institution.' });
+    }
+    whereClause += ' AND f.institution_id = ?';
+    params.push(req.user!.institution_id);
+  }
+
+  if (status) {
+    whereClause += ' AND f.status = ?';
+    params.push(status);
+  }
+  if (verification_status) {
+    whereClause += ' AND f.verification_status = ?';
+    params.push(verification_status);
+  }
+  if (deposit_type) {
+    whereClause += ' AND f.deposit_type = ?';
+    params.push(deposit_type);
+  }
+
+  try {
+    const fdrs = await db.query(`
+      SELECT f.*, i.name as institution_name, i.aicte_id as inst_aicte_id
+      FROM fdrs f
+      JOIN institutions i ON f.institution_id = i.id
+      ${whereClause}
+      ORDER BY f.submitted_at DESC
+    `, params) as any[];
+
+    // CSV Headers
+    const headers = [
+      'Institution AICTE ID',
+      'Institution Name',
+      'FDR Number',
+      'Issuing Bank',
+      'Branch',
+      'Account Number',
+      'Deposit Amount (INR)',
+      'Issue Date',
+      'Maturity Date',
+      'Interest Rate (%)',
+      'Status',
+      'Verification Status',
+      'Is Renewal',
+      'Submitted At'
+    ];
+
+    const escapeCsvField = (val: any): string => {
+      if (val === null || val === undefined) return '';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const csvRows = [headers.join(',')];
+
+    for (const row of fdrs) {
+      const maskedAcct = maskAccountNumber(row.account_number, req.user!.role);
+      const csvLine = [
+        escapeCsvField(row.inst_aicte_id),
+        escapeCsvField(row.institution_name),
+        escapeCsvField(row.fdr_number),
+        escapeCsvField(row.bank_name),
+        escapeCsvField(row.bank_branch || 'N/A'),
+        escapeCsvField(maskedAcct),
+        escapeCsvField(row.deposit_amount),
+        escapeCsvField(row.issue_date),
+        escapeCsvField(row.maturity_date),
+        escapeCsvField(row.interest_rate !== null ? row.interest_rate : ''),
+        escapeCsvField(row.status),
+        escapeCsvField(row.verification_status),
+        escapeCsvField(row.is_renewal ? 'Yes' : 'No'),
+        escapeCsvField(row.submitted_at)
+      ].join(',');
+      csvRows.push(csvLine);
+    }
+
+    const csvContent = csvRows.join('\r\n');
+    const timestamp = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="AICTE_SAFE_FDR_Registry_${timestamp}.csv"`);
+    return res.status(200).send(csvContent);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to generate CSV export' });
+  }
 });
 
 export default router;

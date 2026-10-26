@@ -24,9 +24,15 @@ let pgPool: Pool | null = null;
 const dbUrl = process.env.DATABASE_URL || process.env.SUPABASE_DATABASE_URL || process.env.POSTGRES_URL;
 
 if (dbUrl) {
+  // Supabase pooler uses custom AWS TLS certificates in serverless environments
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   try {
+    let cleanDbUrl = dbUrl;
+    if (cleanDbUrl.includes('sslmode=')) {
+      cleanDbUrl = cleanDbUrl.replace(/[?&]sslmode=[^&]+/, '');
+    }
     pgPool = new Pool({
-      connectionString: dbUrl,
+      connectionString: cleanDbUrl,
       ssl: { rejectUnauthorized: false },
       max: 10,
       idleTimeoutMillis: 30000,

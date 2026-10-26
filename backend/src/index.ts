@@ -76,6 +76,16 @@ export function ensureDbInitialized(): Promise<void> {
   return dbInitPromise;
 }
 
+// Health check responds immediately for cloud serverless monitors
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'AICTE SAFE: Secure Automated FDR & Deposit Engine',
+    database: 'PostgreSQL Sole Source of Truth',
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.use(async (_req, res, next) => {
   try {
     await ensureDbInitialized();
@@ -101,11 +111,6 @@ app.use('/api/invocations', invocationRoutes);
 app.use('/api/certificates', certificateRoutes);
 app.use('/api/bulk', bulkRoutes);
 app.use('/api/documents', documentRoutes);
-
-// Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'AICTE SAFE: Secure Automated FDR & Deposit Engine', timestamp: new Date().toISOString() });
-});
 
 // Serve frontend static build if available
 const frontendDist = path.join(__dirname, '../../frontend/dist');

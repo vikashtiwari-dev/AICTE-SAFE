@@ -123,6 +123,20 @@ export async function syncFromSupabase() {
   try {
     console.log('🔄 Checking Supabase PostgreSQL cloud sync...');
 
+    // 0. Sync Users
+    const pgUsers = await pgPool.query('SELECT * FROM users ORDER BY id ASC');
+    if (pgUsers.rows.length > 0) {
+      for (const u of pgUsers.rows) {
+        try {
+          db.prepare(`
+            INSERT OR REPLACE INTO users (id, username, password_hash, full_name, email, role, institution_id, is_active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(u.id, u.username, u.password_hash, u.full_name, u.email, u.role, u.institution_id || null, u.is_active ?? 1);
+        } catch (_) {}
+      }
+      console.log(`✅ Synced ${pgUsers.rows.length} users from Supabase cloud`);
+    }
+
     // 1. Sync institutions
     const pgInsts = await pgPool.query('SELECT * FROM institutions ORDER BY id ASC');
     if (pgInsts.rows.length > 0) {
@@ -376,6 +390,22 @@ export function initializeDatabase() {
       timestamp TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  try {
+    const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
+    if (!userCount || userCount.count === 0) {
+      const insertUser = db.prepare(`
+        INSERT OR IGNORE INTO users (id, username, password_hash, full_name, email, role, institution_id, is_active)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      insertUser.run(1, 'admin', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'System Administrator', 'admin@aicte.gov.in', 'admin', null, 1);
+      insertUser.run(2, 'officer1', '$2a$10$uzbVo9BNwEYt.j0hSP/S/.XEnWxJvZxHJgv.jWBV/g22Rxk5xGxnG', 'Rajesh Verma (Bureau Officer)', 'r.verma@aicte.gov.in', 'bureau_officer', null, 1);
+      insertUser.run(3, 'inst_user1', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'IIT Bombay Finance Officer', 'finance@iitb.ac.in', 'institution_user', 1, 1);
+      insertUser.run(4, 'viewer1', '$2a$10$QLszhaR6SX6rA1wyDn5w9.1czXkAM/5ARkegWxQhy3YCDSTytMvl6', 'Auditor General / Viewer', 'viewer@aicte.gov.in', 'viewer', null, 1);
+    }
+  } catch (userSeedErr) {
+    console.warn('Initial user seed notice:', userSeedErr);
+  }
 
   // Run cloud sync asynchronously
   if (pgPool) {

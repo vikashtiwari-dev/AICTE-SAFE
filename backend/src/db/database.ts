@@ -327,8 +327,15 @@ export async function executeMutation(sql: string, params: any[] = []): Promise<
  */
 export async function initializeDatabase() {
   if (db.isPostgres && pgPool) {
-    console.log('🔄 Verifying and initializing PostgreSQL authoritative schema...');
     try {
+      // Fast-path check: if schema is already provisioned, return immediately to optimize serverless cold starts
+      const checkRes = await pgPool.query("SELECT to_regclass('public.users') as exists");
+      if (checkRes.rows[0]?.exists) {
+        console.log('✅ PostgreSQL authoritative schema active and verified.');
+        return;
+      }
+
+      console.log('🔄 First-time provisioning of PostgreSQL authoritative schema...');
       await pgPool.query(`
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,

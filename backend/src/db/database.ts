@@ -38,7 +38,7 @@ const rawDbUrl =
   process.env.POSTGRES_PRISMA_URL ||
   (process.env.POSTGRES_HOST && process.env.POSTGRES_USER
     ? `postgres://${encodeURIComponent(process.env.POSTGRES_USER)}:${encodeURIComponent(process.env.POSTGRES_PASSWORD || '')}@${process.env.POSTGRES_HOST}:${process.env.POSTGRES_PORT || 5432}/${process.env.POSTGRES_DATABASE || 'postgres'}`
-    : '');
+    : 'postgresql://postgres.dvqlzghhzfezbdtlsnoc:REDACTED_DATABASE_PASSWORD@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres');
 
 if (rawDbUrl) {
   try {

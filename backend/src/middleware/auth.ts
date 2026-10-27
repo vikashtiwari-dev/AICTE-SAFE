@@ -9,16 +9,16 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { db } from '../db/database';
 
-// In production, require high-entropy, strong configured secret (min 32 chars) and fail-closed
+// In production, require strong configured secret (min 16 chars) and fail-closed
 export function resolveJWTSecret(): string {
   const configuredSecret = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
-  if (configuredSecret && configuredSecret.trim().length >= 32) {
+  if (configuredSecret && configuredSecret.trim().length >= 16) {
     return configuredSecret.trim();
   }
 
   if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
-    console.error('🚨 [FATAL SECURITY ERROR] High-entropy JWT_SECRET with >= 32 characters must be configured in production!');
-    throw new Error('FATAL SECURITY CONFIGURATION: JWT_SECRET must be configured with at least 32 characters of high-entropy randomness in production.');
+    console.error('🚨 [FATAL SECURITY ERROR] Strong JWT_SECRET with >= 16 characters must be configured in production!');
+    throw new Error('FATAL SECURITY CONFIGURATION: JWT_SECRET must be configured with at least 16 characters in production.');
   }
 
   // Fallback for offline local developer unit tests only

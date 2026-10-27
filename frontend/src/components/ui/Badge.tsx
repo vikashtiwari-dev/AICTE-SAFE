@@ -12,7 +12,15 @@ export const Badge: React.FC<BadgeProps> = ({ status, className = '' }) => {
       case 'Verified':
       case 'Approved':
       case 'Completed':
+      case 'Bank Confirmed (Live API)':
+      case 'BANK_CONFIRMED':
         return 'bg-emerald-50 text-emerald-700 border-emerald-200 ring-emerald-600/20';
+      case 'OCR Extracted — Not Bank Verified':
+      case 'OCR_EXTRACTED_NOT_BANK_VERIFIED':
+        return 'bg-cyan-50 text-cyan-800 border-cyan-200 ring-cyan-600/20';
+      case 'Third-Party Directory Matched':
+      case 'THIRD_PARTY_DIRECTORY_CONFIRMED':
+        return 'bg-indigo-50 text-indigo-700 border-indigo-200 ring-indigo-600/20';
       case 'Expiring Soon':
       case 'High':
         return 'bg-amber-50 text-amber-700 border-amber-200 ring-amber-600/20';

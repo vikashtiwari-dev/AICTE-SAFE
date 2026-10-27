@@ -36,12 +36,13 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     (req as any)._body = true;
   }
 
-  if (typeof app === 'function') {
-    return app(req as any, res as any);
+  const expressApp = (app as any)?.default || app;
+  if (typeof expressApp === 'function') {
+    return expressApp(req as any, res as any);
   }
 
   return res.status(500).json({
     error: 'App is not a callable Express application',
-    type: typeof app,
+    type: typeof expressApp,
   });
 }

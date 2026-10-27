@@ -112,8 +112,22 @@ const rawDbUrl =
 
 if (rawDbUrl) {
   try {
-    const { parse: parsePgConn } = require('pg-connection-string');
-    const parsedConn = parsePgConn(rawDbUrl);
+    let parsedConn: any = {};
+    try {
+      const { parse: parsePgConn } = require('pg-connection-string');
+      parsedConn = parsePgConn(rawDbUrl);
+    } catch (_) {
+      try {
+        const u = new URL(rawDbUrl.replace(/^postgresql:\/\//i, 'http://').replace(/^postgres:\/\//i, 'http://'));
+        parsedConn = {
+          user: decodeURIComponent(u.username),
+          password: decodeURIComponent(u.password),
+          host: u.hostname,
+          port: u.port || '5432',
+          database: u.pathname ? u.pathname.replace(/^\//, '') : 'postgres',
+        };
+      } catch (_) {}
+    }
 
     // Enforce strict TLS certificate verification with trusted CA chain
     const sslConfig = {
@@ -158,7 +172,15 @@ export function convertSql(sql: string): { pgSql: string; isInsert: boolean } {
   const upper = trimmed.toUpperCase();
   const isInsert = upper.startsWith('INSERT');
   if (isInsert && !upper.includes('RETURNING') && !upper.includes('DO NOTHING')) {
-    converted = `${trimmed} RETURNING id`;
+    if (upper.includes('DOCUMENT_PAYLOADS')) {
+      converted = `${trimmed} RETURNING fdr_document_id`;
+    } else if (upper.includes('CONSUMED_VIEW_TOKENS')) {
+      converted = `${trimmed} RETURNING token_jti`;
+    } else if (upper.includes('SYSTEM_SETTINGS')) {
+      converted = `${trimmed} RETURNING setting_key`;
+    } else {
+      converted = `${trimmed} RETURNING id`;
+    }
   }
   return { pgSql: converted, isInsert };
 }
@@ -168,8 +190,9 @@ async function runPgQuery(clientOrPool: Pool | PoolClient, sql: string, params: 
   const sanitizedParams = params.map(p => (p === undefined ? null : p));
   try {
     const res = await clientOrPool.query(pgSql, sanitizedParams);
-    const lastInsertRowid = (isInsert && res.rows.length > 0 && res.rows[0].id !== undefined)
-      ? Number(res.rows[0].id)
+    const firstRow = (isInsert && res.rows.length > 0) ? res.rows[0] : null;
+    const lastInsertRowid = firstRow
+      ? Number(firstRow.id ?? firstRow.fdr_document_id ?? 0)
       : 0;
     return {
       rows: res.rows,
@@ -367,6 +390,27 @@ export async function initializeDatabase() {
         ALTER TABLE notifications_log ALTER COLUMN delivery_status TYPE TEXT;
         ALTER TABLE notifications_log ALTER COLUMN status TYPE VARCHAR(100);
         ALTER TABLE notifications_log ALTER COLUMN recipient_role TYPE VARCHAR(100);
+
+        ALTER TABLE fdr_documents ADD COLUMN IF NOT EXISTS sha256_hash VARCHAR(128);
+        ALTER TABLE fdr_documents ADD COLUMN IF NOT EXISTS file_hash VARCHAR(128);
+        ALTER TABLE fdr_documents ALTER COLUMN sha256_hash TYPE VARCHAR(128);
+        ALTER TABLE fdr_documents ALTER COLUMN file_hash TYPE VARCHAR(128);
+        ALTER TABLE fdr_documents ADD COLUMN IF NOT EXISTS verified_on_chain INTEGER DEFAULT 1;
+        ALTER TABLE fdr_documents ADD COLUMN IF NOT EXISTS version INTEGER DEFAULT 1;
+
+        CREATE TABLE IF NOT EXISTS document_payloads (
+          fdr_document_id INTEGER PRIMARY KEY REFERENCES fdr_documents(id) ON DELETE CASCADE,
+          data BYTEA NOT NULL,
+          mime_type VARCHAR(100),
+          file_name VARCHAR(255),
+          uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS consumed_view_tokens (
+          token_jti VARCHAR(100) PRIMARY KEY,
+          document_id INTEGER,
+          consumed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
       `).catch(() => {});
 
       // Fast-path check: if schema is already provisioned, return immediately to optimize serverless cold starts

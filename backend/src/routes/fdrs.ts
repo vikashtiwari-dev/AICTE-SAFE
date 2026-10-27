@@ -308,10 +308,10 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
 
     return res.status(201).json(createdFdr);
   } catch (err: any) {
-    if (err.message && err.message.includes('UNIQUE')) {
+    if (err.code === '23505' || (err.message && (err.message.includes('UNIQUE') || err.message.includes('unique constraint') || err.message.includes('duplicate key')))) {
       return res.status(409).json({ error: `FDR number "${fdr_number}" already exists in the national database.` });
     }
-    return res.status(500).json({ error: 'Failed to create FDR in cloud database' });
+    return res.status(500).json({ error: 'Failed to create FDR in cloud database', details: err.message });
   }
 });
 

@@ -16,18 +16,36 @@ dotenv.config({ path: path.resolve(__dirname, '../backend/.env') });
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Support both compiled dist output and TypeScript development mode
-let app: any;
+let app: any = null;
+let loadError: any = null;
+
 try {
-  app = require('../backend/dist/index.js');
-} catch (_) {
-  app = require('../backend/src/index');
+  let backendModule: any;
+  try {
+    backendModule = require('../backend/dist/index.js');
+  } catch (_) {
+    backendModule = require('../backend/src/index');
+  }
+  app = backendModule.default || backendModule;
+} catch (err: any) {
+  console.error('Fatal Backend Load Error:', err);
+  loadError = {
+    message: err?.message || String(err),
+    stack: err?.stack,
+    name: err?.name,
+  };
 }
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
+  if (loadError) {
+    return res.status(500).json({
+      error: 'Backend Module Load Error in Serverless Function',
+      details: loadError.message,
+      stack: loadError.stack,
+    });
+  }
 
   // When running on Vercel, serverless runtime buffers request body and drains stream.
-  // Parse string/Buffer bodies and mark _body = true to prevent Express body-parser from hanging on drained streams.
   if (req.body !== undefined && req.body !== null) {
     if (typeof req.body === 'string' && (req.body.trim().startsWith('{') || req.body.trim().startsWith('['))) {
       try {
@@ -43,13 +61,12 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     (req as any)._body = true;
   }
 
-  const expressApp = (app as any)?.default || app;
-  if (typeof expressApp === 'function') {
-    return expressApp(req as any, res as any);
+  if (typeof app === 'function') {
+    return app(req as any, res as any);
   }
 
   return res.status(500).json({
     error: 'App is not a callable Express application',
-    type: typeof expressApp,
+    type: typeof app,
   });
 }

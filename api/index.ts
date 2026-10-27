@@ -15,7 +15,14 @@ dotenv.config();
 dotenv.config({ path: path.resolve(__dirname, '../backend/.env') });
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import app from '../backend/src/index';
+
+// Support both compiled dist output and TypeScript development mode
+let app: any;
+try {
+  app = require('../backend/dist/index.js');
+} catch (_) {
+  app = require('../backend/src/index');
+}
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
 

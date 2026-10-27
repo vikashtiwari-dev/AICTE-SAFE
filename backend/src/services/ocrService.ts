@@ -21,8 +21,9 @@ export interface ExtractedFDRData {
   extraction_status: 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' | 'OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED' | 'INSUFFICIENT_DATA_UNREADABLE';
   verification_tier: 'OCR_EXTRACTED_NOT_BANK_VERIFIED';
   requires_manual_scrutiny: boolean;
-  extracted_fields: Record<string, { value: any; confidence: number; source: string }>;
+  extracted_fields: Record<string, { value: any; confidence: number; source: string; status: 'CONFIDENT' | 'UNCERTAIN' }>;
   missing_fields: string[];
+  uncertain_fields: string[];
   discrepancies: string[];
   message: string;
   ocr_engine_used: 'Tesseract_v5_Neural_OCR' | 'PDF_Binary_Token_Stream' | 'Scanned_PDF_Rasterized_Tesseract_OCR' | 'Hybrid_Fallback';
@@ -31,7 +32,7 @@ export interface ExtractedFDRData {
 /**
  * Rasterizes pages of a scanned PDF document into PNG image buffers for Tesseract neural OCR
  */
-async function rasterizePdfPages(pdfBuffer: Buffer, maxPages = 3): Promise<Buffer[]> {
+export async function rasterizePdfPages(pdfBuffer: Buffer, maxPages = 3): Promise<Buffer[]> {
   const images: Buffer[] = [];
   try {
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -66,7 +67,7 @@ async function rasterizePdfPages(pdfBuffer: Buffer, maxPages = 3): Promise<Buffe
 /**
  * Standardizes DD/MM/YYYY or YYYY-MM-DD into ISO YYYY-MM-DD with strict calendar validation
  */
-function normalizeDate(raw: string): string | null {
+export function normalizeDate(raw: string): string | null {
   if (!raw) return null;
   const clean = raw.trim();
   let day: number, month: number, year: number;
@@ -103,7 +104,7 @@ function normalizeDate(raw: string): string | null {
  * Genuine AI Document OCR & Verification Engine for FDR & Security Deposit Instruments
  * - Employs PDF page stream parsing and Tesseract neural OCR for scanned documents
  * - Never fabricates fake values or branches
- * - Evaluates confidence from genuine evidence
+ * - Evaluates confidence from genuine evidence and calculates field-level confidence
  * - Flags uncertain extractions for mandatory human review
  * - Status strictly marked: OCR Extracted — Not Bank Verified
  */
@@ -134,6 +135,7 @@ export async function extractFDRFromDocument(
       requires_manual_scrutiny: true,
       extracted_fields: {},
       missing_fields: ['Document File'],
+      uncertain_fields: ['Document File Not Found'],
       discrepancies: ['File not found on server'],
       message: 'Document file not found. Scrutiny impossible.',
       ocr_engine_used: engineUsed,
@@ -167,11 +169,14 @@ export async function extractFDRFromDocument(
       fileText = pdfData?.text || '';
       try { await parser.destroy(); } catch (_) {}
 
-      if (fileText.trim().length >= 30) {
+      const hasDepositTokens = /(?:fdr|tdr|receipt|deposit|certificate|bank|rupees|rs\.?|₹|account)/i.test(fileText);
+
+      if (fileText.trim().length >= 30 && hasDepositTokens) {
         engineUsed = 'PDF_Binary_Token_Stream';
         engineMeasuredConfidence = 92; // Vector text stream parsed cleanly
       } else {
-        // Scanned PDF fallback: Document contains scanned bitmaps rather than text streams.
+        // Scanned PDF fallback: Document contains scanned bitmaps rather than text streams,
+        // or parsed text lacks key financial tokens.
         // Rasterize PDF pages into PNG images and execute Tesseract neural OCR.
         const pageImages = await rasterizePdfPages(fileBuffer);
         if (pageImages.length > 0) {
@@ -225,28 +230,28 @@ export async function extractFDRFromDocument(
 
   // 4. Bank Matching (Strict regex against authoritative Scheduled Banks)
   const bankPatterns = [
-    { name: 'State Bank of India', regex: /\b(?:state\s*bank\s*of\s*india|sbi)\b/i },
-    { name: 'Punjab National Bank', regex: /\b(?:punjab\s*national\s*bank|pnb)\b/i },
-    { name: 'Bank of Baroda', regex: /\b(?:bank\s*of\s*baroda|bob)\b/i },
-    { name: 'Canara Bank', regex: /\bcanara\s*bank\b/i },
-    { name: 'HDFC Bank Ltd', regex: /\bhdfc\s*bank\b/i },
-    { name: 'ICICI Bank Ltd', regex: /\bicici\s*bank\b/i },
-    { name: 'Union Bank of India', regex: /\bunion\s*bank(?:\s*of\s*india)?\b/i },
-    { name: 'Indian Bank', regex: /\bindian\s*bank\b/i },
-    { name: 'Bank of India', regex: /\bbank\s*of\s*india\b/i },
-    { name: 'Central Bank of India', regex: /\bcentral\s*bank\s*of\s*india\b/i },
-    { name: 'Axis Bank Ltd', regex: /\baxis\s*bank\b/i },
-    { name: 'Kotak Mahindra Bank', regex: /\bkotak\s*mahindra\b/i },
-    { name: 'UCO Bank', regex: /\buco\s*bank\b/i },
-    { name: 'Indian Overseas Bank', regex: /\bindian\s*overseas\s*bank\b/i },
-    { name: 'Bank of Maharashtra', regex: /\bbank\s*of\s*maharashtra\b/i },
-    { name: 'Punjab & Sind Bank', regex: /\bpunjab\s*&\s*sind\b/i },
-    { name: 'Federal Bank', regex: /\bfederal\s*bank\b/i },
-    { name: 'IDBI Bank Ltd', regex: /\bidbi\s*bank\b/i },
-    { name: 'IndusInd Bank', regex: /\bindusind\s*bank\b/i },
-    { name: 'Karur Vysya Bank', regex: /\bkarur\s*vysya\b/i },
-    { name: 'Yes Bank Ltd', regex: /\byes\s*bank\b/i },
-    { name: 'IDFC First Bank', regex: /\bidfc\s*first\b/i },
+    { name: 'State Bank of India', regex: /\b(?:state\s*bank\s*of\s*india|sbi)\b/i, isFullName: true },
+    { name: 'Punjab National Bank', regex: /\b(?:punjab\s*national\s*bank|pnb)\b/i, isFullName: true },
+    { name: 'Bank of Baroda', regex: /\b(?:bank\s*of\s*baroda|bob)\b/i, isFullName: true },
+    { name: 'Canara Bank', regex: /\bcanara\s*bank\b/i, isFullName: true },
+    { name: 'HDFC Bank Ltd', regex: /\bhdfc\s*bank\b/i, isFullName: true },
+    { name: 'ICICI Bank Ltd', regex: /\bicici\s*bank\b/i, isFullName: true },
+    { name: 'Union Bank of India', regex: /\bunion\s*bank(?:\s*of\s*india)?\b/i, isFullName: true },
+    { name: 'Indian Bank', regex: /\bindian\s*bank\b/i, isFullName: true },
+    { name: 'Bank of India', regex: /\bbank\s*of\s*india\b/i, isFullName: true },
+    { name: 'Central Bank of India', regex: /\bcentral\s*bank\s*of\s*india\b/i, isFullName: true },
+    { name: 'Axis Bank Ltd', regex: /\baxis\s*bank\b/i, isFullName: true },
+    { name: 'Kotak Mahindra Bank', regex: /\bkotak\s*mahindra\b/i, isFullName: true },
+    { name: 'UCO Bank', regex: /\buco\s*bank\b/i, isFullName: true },
+    { name: 'Indian Overseas Bank', regex: /\bindian\s*overseas\s*bank\b/i, isFullName: true },
+    { name: 'Bank of Maharashtra', regex: /\bbank\s*of\s*maharashtra\b/i, isFullName: true },
+    { name: 'Punjab & Sind Bank', regex: /\bpunjab\s*&\s*sind\b/i, isFullName: true },
+    { name: 'Federal Bank', regex: /\bfederal\s*bank\b/i, isFullName: true },
+    { name: 'IDBI Bank Ltd', regex: /\bidbi\s*bank\b/i, isFullName: true },
+    { name: 'IndusInd Bank', regex: /\bindusind\s*bank\b/i, isFullName: true },
+    { name: 'Karur Vysya Bank', regex: /\bkarur\s*vysya\b/i, isFullName: true },
+    { name: 'Yes Bank Ltd', regex: /\byes\s*bank\b/i, isFullName: true },
+    { name: 'IDFC First Bank', regex: /\bidfc\s*first\b/i, isFullName: true },
   ];
 
   let detectedBankName: string | null = null;
@@ -254,12 +259,12 @@ export async function extractFDRFromDocument(
   for (const b of bankPatterns) {
     if (b.regex.test(fileText)) {
       detectedBankName = b.name;
-      bankMatchConfidence = 0.95;
+      bankMatchConfidence = b.isFullName ? 0.95 : 0.75;
       break;
     }
   }
 
-  // 4. Honest Branch Extraction (Extract ONLY if explicitly written; never invent a fixed branch)
+  // 5. Honest Branch Extraction (Extract ONLY if explicitly written; never invent a fixed branch)
   let detectedBranch: string | null = null;
   const branchMatch = fileText.match(/(?:branch|br\.?|branch\s*name)[:\s-]*([A-Za-z0-9\s,\.]{3,40})(?:\n|\r|pin|ifsc|$)/i);
   if (branchMatch && branchMatch[1].trim().length >= 3) {
@@ -294,23 +299,28 @@ export async function extractFDRFromDocument(
 
   const fdrNumber = fdrMatch ? fdrMatch[1].trim().toUpperCase() : null;
   let depositAmount: number | null = null;
-  if (amountMatch) {
+  let amountMatchSource = 'Numeric Currency Parser';
+
+  // Support Indian Lakh / Crore written notations first (e.g. "35 Lakh", "1.5 Crore", "Rs. 35 Lakhs")
+  const croreMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)?[:.\s]*([0-9]+(?:\.[0-9]+)?)\s*(?:crore|cr|crores)\b/i);
+  const lakhMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)?[:.\s]*([0-9]+(?:\.[0-9]+)?)\s*(?:lakh|lac|lacs|lakhs)\b/i);
+
+  if (croreMatch) {
+    const crVal = parseFloat(croreMatch[1]);
+    if (!isNaN(crVal) && crVal > 0) {
+      depositAmount = Math.round(crVal * 10000000);
+      amountMatchSource = 'Written Crore Notation Parser';
+    }
+  } else if (lakhMatch) {
+    const lkVal = parseFloat(lakhMatch[1]);
+    if (!isNaN(lkVal) && lkVal > 0) {
+      depositAmount = Math.round(lkVal * 100000);
+      amountMatchSource = 'Written Lakh Notation Parser';
+    }
+  } else if (amountMatch) {
     const parsed = parseFloat(amountMatch[1].replace(/,/g, ''));
     if (!isNaN(parsed) && parsed > 0) {
       depositAmount = parsed;
-    }
-  }
-
-  // Support Indian Lakh / Crore written notations (e.g. "35 Lakh" or "1.5 Crore")
-  if (!depositAmount) {
-    const croreMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)?[:.\s]*([0-9]+(?:\.[0-9]+)?)\s*(?:crore|cr|crores)\b/i);
-    const lakhMatch = fileText.match(/(?:rs\.?|inr|₹|sum\s*of|deposit\s*amount)?[:.\s]*([0-9]+(?:\.[0-9]+)?)\s*(?:lakh|lac|lacs|lakhs)\b/i);
-    if (croreMatch) {
-      const crVal = parseFloat(croreMatch[1]);
-      if (!isNaN(crVal) && crVal > 0) depositAmount = Math.round(crVal * 10000000);
-    } else if (lakhMatch) {
-      const lkVal = parseFloat(lakhMatch[1]);
-      if (!isNaN(lkVal) && lkVal > 0) depositAmount = Math.round(lkVal * 100000);
     }
   }
 
@@ -325,95 +335,159 @@ export async function extractFDRFromDocument(
   let issueDate: string | null = explicitIssueMatch ? normalizeDate(explicitIssueMatch[1]) : null;
   let maturityDate: string | null = explicitMaturityMatch ? normalizeDate(explicitMaturityMatch[1]) : null;
 
+  let issueDateSource = 'Explicit Issue Date Label';
+  let maturityDateSource = 'Explicit Maturity Date Label';
+
   if (!issueDate && normalizedDates.length >= 1) {
     issueDate = normalizedDates[0];
+    issueDateSource = 'Inferred Earliest Calendar Date';
   }
   if (!maturityDate && normalizedDates.length >= 2) {
     maturityDate = normalizedDates[normalizedDates.length - 1];
+    maturityDateSource = 'Inferred Latest Calendar Date';
   }
 
   const discrepancies: string[] = [];
-
-  // Strict chronological validation: issue date cannot exceed maturity date
-  if (issueDate && maturityDate && issueDate > maturityDate) {
-    discrepancies.push(`Chronological discrepancy: Issue date (${issueDate}) cannot be later than maturity date (${maturityDate})`);
-  }
-
-  // 6. Mathematical Confidence Computation Based on Genuine Evidence
-  const extractedFields: Record<string, { value: any; confidence: number; source: string }> = {};
+  const uncertainFields: string[] = [];
   const missingFields: string[] = [];
+  const extractedFields: Record<string, { value: any; confidence: number; source: string; status: 'CONFIDENT' | 'UNCERTAIN' }> = {};
 
   let evidencePoints = 0;
-  const maxPoints = 100;
 
+  // 1. FDR Number Field Confidence Evaluation
   if (fdrNumber) {
-    evidencePoints += 25;
-    extractedFields['fdr_number'] = { value: fdrNumber, confidence: 0.95, source: 'OCR Token Match' };
+    let conf = /(?:fdr|tdr|stdr)[-_/]/i.test(fdrNumber) ? 0.95 : 0.75;
+    let src = 'OCR Token Match';
+    if (submittedData?.fdr_number) {
+      if (submittedData.fdr_number.trim().toUpperCase() === fdrNumber) {
+        conf = 0.99;
+        src = 'OCR Token Match (Corroborated with Submission)';
+      } else {
+        conf = 0.35;
+        discrepancies.push(`FDR Number mismatch: Extracted "${fdrNumber}" vs Submitted "${submittedData.fdr_number}".`);
+        uncertainFields.push('fdr_number');
+      }
+    }
+    evidencePoints += Math.round(conf * 25);
+    extractedFields['fdr_number'] = {
+      value: fdrNumber,
+      confidence: conf,
+      source: src,
+      status: conf >= 0.70 ? 'CONFIDENT' : 'UNCERTAIN'
+    };
   } else {
     missingFields.push('Instrument / FDR Number');
+    uncertainFields.push('fdr_number');
   }
 
+  // 2. Deposit Amount Field Confidence Evaluation
   if (depositAmount) {
-    evidencePoints += 25;
-    extractedFields['deposit_amount'] = { value: depositAmount, confidence: 0.92, source: 'Numeric Currency Parser' };
+    let conf = amountMatchSource.includes('Notation') ? 0.90 : 0.92;
+    let src = amountMatchSource;
+    if (submittedData?.deposit_amount) {
+      if (Math.abs(submittedData.deposit_amount - depositAmount) <= 1.0) {
+        conf = 0.98;
+        src = `${amountMatchSource} (Corroborated with Submission)`;
+      } else {
+        conf = 0.30;
+        discrepancies.push(
+          `Amount mismatch: Extracted amount ₹${depositAmount.toLocaleString('en-IN')} differs from submitted value ₹${submittedData.deposit_amount.toLocaleString('en-IN')}.`
+        );
+        uncertainFields.push('deposit_amount');
+      }
+    }
+    evidencePoints += Math.round(conf * 25);
+    extractedFields['deposit_amount'] = {
+      value: depositAmount,
+      confidence: conf,
+      source: src,
+      status: conf >= 0.70 ? 'CONFIDENT' : 'UNCERTAIN'
+    };
   } else {
     missingFields.push('Deposit Amount (₹)');
+    uncertainFields.push('deposit_amount');
   }
 
+  // 3. Bank Name Field Confidence Evaluation
   if (detectedBankName) {
-    evidencePoints += 15;
-    extractedFields['bank_name'] = { value: detectedBankName, confidence: bankMatchConfidence, source: 'RBI Scheduled Directory Entity Matching' };
+    evidencePoints += Math.round(bankMatchConfidence * 15);
+    extractedFields['bank_name'] = {
+      value: detectedBankName,
+      confidence: bankMatchConfidence,
+      source: 'RBI Scheduled Directory Entity Matching',
+      status: bankMatchConfidence >= 0.70 ? 'CONFIDENT' : 'UNCERTAIN'
+    };
   } else {
     missingFields.push('Issuing Bank Name');
+    uncertainFields.push('bank_name');
   }
 
+  // 4. IFSC Code Field Confidence Evaluation
   if (ifscCode) {
     evidencePoints += 10;
-    extractedFields['ifsc_code'] = { value: ifscCode, confidence: 0.98, source: 'IFSC Alphanumeric Standard (RBI)' };
+    extractedFields['ifsc_code'] = {
+      value: ifscCode,
+      confidence: 0.98,
+      source: 'IFSC Alphanumeric Standard (RBI)',
+      status: 'CONFIDENT'
+    };
   }
 
+  // 5. Account Number Field Confidence Evaluation
   if (accountNumber) {
     evidencePoints += 10;
-    extractedFields['account_number'] = { value: accountNumber, confidence: 0.90, source: 'Bank Account Match' };
+    extractedFields['account_number'] = {
+      value: accountNumber,
+      confidence: 0.90,
+      source: 'Bank Account Match',
+      status: 'CONFIDENT'
+    };
   } else {
     missingFields.push('Lien Account Number');
+    uncertainFields.push('account_number');
   }
 
+  // 6. Dates Field Confidence Evaluation
   if (issueDate && maturityDate) {
-    evidencePoints += 15;
-    extractedFields['issue_date'] = { value: issueDate, confidence: 0.88, source: 'Chronological Parser' };
-    extractedFields['maturity_date'] = { value: maturityDate, confidence: 0.88, source: 'Chronological Parser' };
+    let dateConf = (explicitIssueMatch && explicitMaturityMatch) ? 0.90 : 0.65;
+    if (dateConf < 0.70) {
+      uncertainFields.push('issue_date', 'maturity_date');
+    }
 
-    // Format validation: maturity date must be after issue date
+    // Chronological validation
     if (new Date(maturityDate) <= new Date(issueDate)) {
       discrepancies.push(`Date format inconsistency: Maturity date (${maturityDate}) precedes or equals issue date (${issueDate}).`);
+      dateConf = 0.10;
+      uncertainFields.push('maturity_date');
       evidencePoints -= 10;
+    } else {
+      evidencePoints += Math.round(dateConf * 15);
     }
+
+    extractedFields['issue_date'] = {
+      value: issueDate,
+      confidence: dateConf,
+      source: issueDateSource,
+      status: dateConf >= 0.70 ? 'CONFIDENT' : 'UNCERTAIN'
+    };
+    extractedFields['maturity_date'] = {
+      value: maturityDate,
+      confidence: dateConf,
+      source: maturityDateSource,
+      status: dateConf >= 0.70 ? 'CONFIDENT' : 'UNCERTAIN'
+    };
   } else {
     missingFields.push('Issue / Maturity Dates');
+    uncertainFields.push('dates');
   }
 
+  // 7. Mandatory AICTE Joint Lien Clause Check
   if (!hasJointLienClause) {
     discrepancies.push('Mandatory Joint-Lien Endorsement Clause in favour of AICTE is not detected in the document text.');
+    uncertainFields.push('has_joint_lien_clause');
   }
 
-  // Cross-validation with applicant submitted data if provided
-  if (submittedData?.deposit_amount && depositAmount) {
-    if (Math.abs(submittedData.deposit_amount - depositAmount) > 1.0) {
-      discrepancies.push(
-        `Amount mismatch: Extracted amount ₹${depositAmount.toLocaleString('en-IN')} differs from submitted value ₹${submittedData.deposit_amount.toLocaleString('en-IN')}.`
-      );
-      evidencePoints -= 15;
-    }
-  }
-
-  if (submittedData?.fdr_number && fdrNumber) {
-    if (submittedData.fdr_number.trim().toUpperCase() !== fdrNumber) {
-      discrepancies.push(`FDR Number mismatch: Extracted "${fdrNumber}" vs Submitted "${submittedData.fdr_number}".`);
-      evidencePoints -= 15;
-    }
-  }
-
+  // Overall Mathematical Confidence Calculation
   let combinedConfidence = evidencePoints;
   if (engineMeasuredConfidence !== null) {
     // Corroborate token completeness with engine-measured character recognition confidence
@@ -421,16 +495,16 @@ export async function extractFDRFromDocument(
   }
   const confidenceScore = Math.max(0, Math.min(100, Math.round(combinedConfidence)));
 
-  // 7. Status and Human Review Routing
+  // Status and Human Review Determination
   let extractionStatus: 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' | 'OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED' | 'INSUFFICIENT_DATA_UNREADABLE';
   let message: string;
 
-  if (confidenceScore >= 75 && missingFields.length === 0 && discrepancies.length === 0) {
+  if (confidenceScore >= 75 && missingFields.length === 0 && discrepancies.length === 0 && uncertainFields.length === 0) {
     extractionStatus = 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY';
     message = 'High-confidence OCR extraction completed. Pending formal officer scrutiny and bank clearance.';
-  } else if (confidenceScore >= 30) {
+  } else if (confidenceScore >= 25) {
     extractionStatus = 'OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED';
-    message = `Uncertain OCR extraction (${confidenceScore}% confidence). Missing: [${missingFields.join(', ')}]. Sent for Bureau Officer manual scrutiny.`;
+    message = `Uncertain OCR extraction (${confidenceScore}% confidence). Uncertain fields: [${uncertainFields.join(', ')}]. Sent for Bureau Officer manual scrutiny.`;
   } else {
     extractionStatus = 'INSUFFICIENT_DATA_UNREADABLE';
     message = 'Document unreadable or lacking financial FDR tokens. Manual officer scrutiny mandatory.';
@@ -454,9 +528,17 @@ export async function extractFDRFromDocument(
     engine_measured_confidence: engineMeasuredConfidence,
     extraction_status: extractionStatus,
     verification_tier: 'OCR_EXTRACTED_NOT_BANK_VERIFIED',
-    requires_manual_scrutiny: extractionStatus !== 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' || discrepancies.length > 0 || missingFields.length > 0,
+    requires_manual_scrutiny: (
+      extractionStatus !== 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' ||
+      discrepancies.length > 0 ||
+      missingFields.length > 0 ||
+      uncertainFields.length > 0 ||
+      confidenceScore < 85 ||
+      engineUsed === 'Scanned_PDF_Rasterized_Tesseract_OCR'
+    ),
     extracted_fields: extractedFields,
     missing_fields: missingFields,
+    uncertain_fields: Array.from(new Set(uncertainFields)),
     discrepancies,
     message,
     ocr_engine_used: engineUsed,

@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest, maskAccountNumber } from '../middleware/auth';
-import { upload, validateFileMagic } from '../middleware/upload';
+import { upload, validateFileMagic, validateDocumentFile } from '../middleware/upload';
 import { lookupIFSC, verifyNeSLeBG, validateSFMS_IFN760 } from '../services/bankingService';
 import { extractFDRFromDocument } from '../services/ocrService';
 import { calculateRequiredDeposit, validateLockInEligibility } from '../services/aphService';
@@ -26,9 +26,10 @@ router.post('/ocr-extract', authenticate, upload.single('file'), async (req: Aut
       });
     }
 
-    if (!validateFileMagic(req.file.path)) {
+    const valResult = validateDocumentFile(req.file.path, req.file.originalname);
+    if (!valResult.valid) {
       try { fs.unlinkSync(req.file.path); } catch (_) {}
-      return res.status(400).json({ error: 'Security rejection: Uploaded file signature does not match authentic document formats.' });
+      return res.status(400).json({ error: valResult.error || 'Security rejection: Uploaded file signature does not match authentic document formats.' });
     }
 
     const submittedData = {
@@ -490,10 +491,11 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
   upload.single('file'), async (req: AuthRequest, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    // Enforce strict file magic signature verification
-    if (!validateFileMagic(req.file.path)) {
+    // Enforce strict file magic signature and deep format verification
+    const valResult = validateDocumentFile(req.file.path, req.file.originalname);
+    if (!valResult.valid) {
       try { fs.unlinkSync(req.file.path); } catch (_) {}
-      return res.status(400).json({ error: 'Security validation failed: File headers do not match legitimate document formats (PDF, JPEG, PNG, DOCX).' });
+      return res.status(400).json({ error: valResult.error || 'Security validation failed: File headers do not match legitimate document formats (PDF, JPEG, PNG, DOCX).' });
     }
 
     const fdr = await db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;

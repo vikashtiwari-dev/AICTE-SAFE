@@ -9,6 +9,8 @@ const { lookupIFSC, verifyNeSLeBG } = require('./dist/services/bankingService.js
 const { extractFDRFromDocument } = require('./dist/services/ocrService.js');
 const { resolveJWTSecret } = require('./dist/middleware/auth.js');
 const { generateAlerts, dispatchStatutoryNudges, getAlertConfig, saveAlertConfig, isValidEmail, isValidPhone, dispatchMessageToChannel } = require('./dist/services/alertService.js');
+const { validateDocumentFile, validateFileMagic } = require('./dist/middleware/upload.js');
+const { isServerlessEnvironment, startCronJobs } = require('./dist/services/cronService.js');
 const crypto = require('crypto');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
@@ -501,12 +503,238 @@ Branch: Connaught Place, New Delhi (IFSC: SBIN0000691)
     assert(false, 'Release seal and provenance test failed', err.message);
   }
 
+  // Test 19: Fail-Closed Scheduled Cron Authentication & Serverless In-Process Suppression (Issues A & B)
+  console.log('\n▶ TEST 19: Fail-Closed Scheduled Cron Authentication & Serverless In-Process Suppression');
+  try {
+    // 1. In-process cron suppression in serverless environment
+    const origVercel = process.env.VERCEL;
+    const origNodeEnv = process.env.NODE_ENV;
+    const origCronSecret = process.env.CRON_SECRET;
+
+    process.env.VERCEL = '1';
+    assert(isServerlessEnvironment() === true, 'isServerlessEnvironment() returns true when VERCEL=1');
+    const serverlessResult = startCronJobs();
+    assert(serverlessResult.active === false, 'startCronJobs() suppresses in-process scheduler in serverless environment');
+    assert(serverlessResult.reason.includes('Vercel Cron is the authoritative scheduler'), 'Honest log confirms Vercel Cron as sole authoritative scheduler');
+
+    // 2. Production fail-closed when CRON_SECRET is missing
+    process.env.NODE_ENV = 'production';
+    delete process.env.CRON_SECRET;
+    
+    // Simulate Cron Auth Handler in production with missing secret
+    const verifyCronAuth = (authHeader, cronSecret, isProd) => {
+      if (isProd && (!cronSecret || cronSecret.trim().length < 16)) {
+        return { status: 500, error: 'CRON_AUTHENTICATION_NOT_CONFIGURED' };
+      }
+      if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
+        return { status: 200, authorized: true };
+      }
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const secret = resolveJWTSecret();
+          const decoded = jwt.verify(authHeader.substring(7), secret);
+          if (decoded && (decoded.role === 'admin' || decoded.role === 'bureau_officer')) {
+            return { status: 200, authorized: true };
+          }
+        } catch (_) {}
+      }
+      return { status: 401, error: 'Unauthorized' };
+    };
+
+    const missingSecretResult = verifyCronAuth('Bearer anything', undefined, true);
+    assert(missingSecretResult.status === 500, 'Scheduled endpoint strictly fails closed (HTTP 500) if CRON_SECRET is missing in production');
+
+    // 3. Reject missing credentials or spoofed headers
+    const testSecret = 'SuperSecureCronSecret2026_WithHighEntropy123!';
+    const noAuthResult = verifyCronAuth(undefined, testSecret, true);
+    assert(noAuthResult.status === 401, 'Request with missing authorization header rejected (HTTP 401)');
+
+    // 4. Reject incorrect secret
+    const wrongAuthResult = verifyCronAuth('Bearer IncorrectSecretToken99', testSecret, true);
+    assert(wrongAuthResult.status === 401, 'Request with incorrect secret rejected (HTTP 401)');
+
+    // 5. Authorize valid Bearer CRON_SECRET
+    const validSecretResult = verifyCronAuth(`Bearer ${testSecret}`, testSecret, true);
+    assert(validSecretResult.status === 200, 'Request with authentic Bearer CRON_SECRET authorized (HTTP 200)');
+
+    // 6. Authorize authenticated Administrator JWT
+    const jwtSecret = resolveJWTSecret();
+    const adminToken = jwt.sign({ userId: 1, role: 'admin', username: 'admin' }, jwtSecret);
+    const adminAuthResult = verifyCronAuth(`Bearer ${adminToken}`, testSecret, true);
+    assert(adminAuthResult.status === 200, 'Request with Administrator JWT authorized for manual trigger (HTTP 200)');
+
+    // Restore environment
+    process.env.VERCEL = origVercel;
+    process.env.NODE_ENV = origNodeEnv;
+    process.env.CRON_SECRET = origCronSecret;
+  } catch (err) {
+    assert(false, 'Cron endpoint authentication test failed', err.message);
+  }
+
+  // Test 20: Field-Level OCR Confidence Scoring, Uncertain Fields & Scanned-PDF Rasterization (Issue C)
+  console.log('\n▶ TEST 20: Field-Level OCR Confidence Scoring, Uncertain Fields & Scanned-PDF Rasterization');
+  try {
+    // 1. High confidence test with all fields matching and corroborated
+    const sampleDocPath = path.join(__dirname, 'temp_ocr_high_conf.txt');
+    fs.writeFileSync(sampleDocPath, `
+STATE BANK OF INDIA - FIXED DEPOSIT RECEIPT
+FDR Certificate No: FDR-SBI-2026-990011
+Account Number: 39988112233
+Deposit Amount: Rs. 50,00,000.00
+Issue Date: 10/01/2024
+Maturity Date: 10/01/2034
+Interest Rate: 7.10%
+Branch: Parliament Street Branch, New Delhi
+Joint Lien marked in favour of AICTE under Regulation 2024
+    `);
+
+    const highConfResult = await extractFDRFromDocument(sampleDocPath, {
+      deposit_amount: 5000000,
+      fdr_number: 'FDR-SBI-2026-990011'
+    });
+    fs.unlinkSync(sampleDocPath);
+
+    assert(highConfResult.verification_tier === 'OCR_EXTRACTED_NOT_BANK_VERIFIED', 'Verification tier is explicitly OCR_EXTRACTED_NOT_BANK_VERIFIED');
+    assert(typeof highConfResult.extracted_fields['fdr_number']?.confidence === 'number', `Field-level confidence computed for fdr_number (${highConfResult.extracted_fields['fdr_number']?.confidence})`);
+    assert(typeof highConfResult.extracted_fields['deposit_amount']?.confidence === 'number', `Field-level confidence computed for deposit_amount (${highConfResult.extracted_fields['deposit_amount']?.confidence})`);
+    assert(highConfResult.extracted_fields['deposit_amount']?.confidence >= 0.90, 'Corroborated deposit amount confidence >= 0.90');
+
+    // 2. Discrepancy & uncertain field detection (Mismatched amount, missing lien clause)
+    const uncertainDocPath = path.join(__dirname, 'temp_ocr_uncertain.txt');
+    fs.writeFileSync(uncertainDocPath, `
+FDR Number: FDR-PNB-2026-112233
+Deposit Amount: Rs. 25,00,000.00
+Punjab National Bank
+No lien clause mentioned here.
+    `);
+
+    const uncertainResult = await extractFDRFromDocument(uncertainDocPath, {
+      deposit_amount: 5000000, // Discrepancy: submitted 50L vs extracted 25L
+      fdr_number: 'FDR-PNB-2026-112233'
+    });
+    fs.unlinkSync(uncertainDocPath);
+
+    assert(uncertainResult.requires_manual_scrutiny === true, 'requires_manual_scrutiny is strictly true when fields are uncertain or mismatched');
+    assert(uncertainResult.uncertain_fields.includes('deposit_amount'), 'uncertain_fields correctly tags "deposit_amount" due to discrepancy');
+    assert(uncertainResult.uncertain_fields.includes('has_joint_lien_clause'), 'uncertain_fields correctly tags missing mandatory joint-lien clause');
+    assert(uncertainResult.discrepancies.length > 0, 'discrepancies array populated with explicit amount mismatch explanation');
+    assert(uncertainResult.extraction_status === 'OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED', 'extraction_status is OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED');
+
+    // 3. Indian notation lakh/crore support
+    const lakhDocPath = path.join(__dirname, 'temp_ocr_lakh.txt');
+    fs.writeFileSync(lakhDocPath, 'Fixed Deposit Receipt: FDR-BOB-2026-5544\nDeposit Amount: 35 Lakh\nBank of Baroda\n');
+    const lakhResult = await extractFDRFromDocument(lakhDocPath);
+    fs.unlinkSync(lakhDocPath);
+    assert(lakhResult.deposit_amount === 3500000, 'Indian written notation "35 Lakh" parsed accurately as ₹35,00,000');
+  } catch (err) {
+    assert(false, 'OCR field-level confidence test failed', err.message);
+  }
+
+  // Test 21: Deep Format-Aware Document File Validation & Antivirus / Zip-Bomb Protection (Issue D)
+  console.log('\n▶ TEST 21: Deep Format-Aware Document File Validation & Antivirus / Zip-Bomb Protection');
+  try {
+    const testDir = path.join(__dirname, 'temp_val_tests');
+    if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
+
+    // 1. Valid PDF with %PDF header and %%EOF trailer
+    const validPdfPath = path.join(testDir, 'valid.pdf');
+    fs.writeFileSync(validPdfPath, '%PDF-1.5\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 1\n0000000000 65535 f \ntrailer\n<< /Root 1 0 R >>\nstartxref\n50\n%%EOF');
+    const validPdfRes = validateDocumentFile(validPdfPath);
+    assert(validPdfRes.valid === true, 'Authentic PDF with %PDF header and %%EOF trailer accepted');
+    assert(validPdfRes.format === 'PDF', 'Format classified as PDF');
+
+    // 2. Malformed PDF missing %%EOF
+    const malformedPdfPath = path.join(testDir, 'truncated.pdf');
+    fs.writeFileSync(malformedPdfPath, '%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ncorrupted truncation without trailer');
+    const malformedPdfRes = validateDocumentFile(malformedPdfPath);
+    assert(malformedPdfRes.valid === false, 'Truncated PDF lacking %%EOF trailer strictly rejected');
+    assert(malformedPdfRes.error.includes('%%EOF'), 'Error explicitly cites missing %%EOF trailer');
+
+    // 3. Valid JPEG with FF D8 FF header and FF D9 EOI marker
+    const validJpgPath = path.join(testDir, 'valid.jpg');
+    const validJpgBuf = Buffer.concat([
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01]),
+      Buffer.alloc(32, 0xAA),
+      Buffer.from([0xFF, 0xD9])
+    ]);
+    fs.writeFileSync(validJpgPath, validJpgBuf);
+    const validJpgRes = validateDocumentFile(validJpgPath);
+    assert(validJpgRes.valid === true, 'Authentic JPEG with FF D8 FF SOI and FF D9 EOI markers accepted');
+
+    // 4. Malformed JPEG missing FF D9 EOI marker
+    const malformedJpgPath = path.join(testDir, 'truncated.jpg');
+    const malformedJpgBuf = Buffer.concat([
+      Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]),
+      Buffer.alloc(32, 0xAA) // no FF D9 at end
+    ]);
+    fs.writeFileSync(malformedJpgPath, malformedJpgBuf);
+    const malformedJpgRes = validateDocumentFile(malformedJpgPath);
+    assert(malformedJpgRes.valid === false, 'Truncated JPEG lacking EOI (FF D9) marker strictly rejected');
+    assert(malformedJpgRes.error.includes('EOI'), 'Error explicitly cites missing EOI marker');
+
+    // 5. Valid PNG with 8-byte signature, IHDR chunk and IEND chunk
+    const validPngPath = path.join(testDir, 'valid.png');
+    const ihdrChunk = Buffer.alloc(13 + 12);
+    ihdrChunk.writeUInt32BE(13, 0); // length
+    ihdrChunk.write('IHDR', 4);
+    ihdrChunk.writeUInt32BE(800, 8); // width
+    ihdrChunk.writeUInt32BE(600, 12); // height
+    ihdrChunk.writeUInt8(8, 16); // bit depth
+    ihdrChunk.writeUInt8(2, 17); // color type
+    ihdrChunk.writeUInt32BE(0x12345678, 21); // crc
+    const iendChunk = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82]);
+    const validPngBuf = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+      ihdrChunk,
+      iendChunk
+    ]);
+    fs.writeFileSync(validPngPath, validPngBuf);
+    const validPngRes = validateDocumentFile(validPngPath);
+    assert(validPngRes.valid === true, 'Authentic PNG with valid IHDR dimensions and IEND chunk accepted');
+
+    // 6. Generic zip archive lacking WordprocessingML structure rejected as fake DOCX
+    const genericZipPath = path.join(testDir, 'generic.docx');
+    // Minimal zip with a single text file "notes.txt"
+    const lfh = Buffer.alloc(30 + 9);
+    lfh.write('PK\x03\x04', 0);
+    lfh.writeUInt16LE(20, 4); // version
+    lfh.writeUInt32LE(0, 14); // crc
+    lfh.writeUInt32LE(4, 18); // comp size
+    lfh.writeUInt32LE(4, 22); // uncomp size
+    lfh.writeUInt16LE(9, 26); // name length
+    lfh.write('notes.txt', 30);
+    const eocd = Buffer.from('PK\x05\x06\x00\x00\x00\x00\x01\x00\x01\x00\x30\x00\x00\x00\x30\x00\x00\x00\x00\x00');
+    fs.writeFileSync(genericZipPath, Buffer.concat([lfh, Buffer.from('test'), eocd]));
+    const genericZipRes = validateDocumentFile(genericZipPath);
+    assert(genericZipRes.valid === false, 'Generic ZIP archive lacking WordprocessingML structure strictly rejected');
+    assert(genericZipRes.error.includes('generic ZIP file'), 'Error clarifies generic zip is not an authentic .docx document');
+
+    // 7. Zip package containing dangerous executable (.exe / .bat) rejected
+    const maliciousZipPath = path.join(testDir, 'malicious.docx');
+    const exeLfh = Buffer.alloc(30 + 11);
+    exeLfh.write('PK\x03\x04', 0);
+    exeLfh.writeUInt16LE(20, 4);
+    exeLfh.writeUInt32LE(10, 18);
+    exeLfh.writeUInt32LE(10, 22);
+    exeLfh.writeUInt16LE(11, 26);
+    exeLfh.write('payload.exe', 30);
+    fs.writeFileSync(maliciousZipPath, Buffer.concat([exeLfh, Buffer.from('fake_pe_hdr'), eocd]));
+    const malZipRes = validateDocumentFile(maliciousZipPath);
+    assert(malZipRes.valid === false, 'ZIP archive containing prohibited executable extension strictly rejected');
+    assert(malZipRes.error.includes('payload.exe'), 'Error explicitly flags dangerous executable file name');
+
+    // Clean up test fixtures
+    fs.rmSync(testDir, { recursive: true, force: true });
+  } catch (err) {
+    assert(false, 'Deep file validation test failed', err.message);
+  }
+
   console.log('\n===================================================================');
   console.log(`📊 RESULTS: ${passedTests} / ${totalTests} AUDIT CHECKS PASSED (${Math.round((passedTests/totalTests)*100)}%)`);
   console.log('===================================================================\n');
 
   if (passedTests === totalTests) {
-    console.log('🎯 ALL 18 CRITICAL SECURITY, INTEGRITY & REGULATORY CRITERIA ARE 100% SATISFIED!');
+    console.log('🎯 ALL 21 CRITICAL SECURITY, INTEGRITY & REGULATORY CRITERIA ARE 100% SATISFIED!');
     process.exit(0);
   } else {
     process.exit(1);

@@ -1,7 +1,7 @@
 import express from 'express';
 import { db, executeMutation } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { upload, validateFileMagic } from '../middleware/upload';
+import { upload } from '../middleware/upload';
 import fs from 'fs';
 
 const router = express.Router();

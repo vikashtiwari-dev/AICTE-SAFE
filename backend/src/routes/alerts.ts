@@ -1,21 +1,49 @@
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import { db, recordAuditLog } from '../db/database';
-import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { authenticate, requireRole, AuthRequest, resolveJWTSecret } from '../middleware/auth';
 import { generateAlerts, dispatchStatutoryNudges, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
 
 const router = express.Router();
 
 // GET /api/alerts/cron-check or POST /api/alerts/cron-check - Vercel Scheduled Cron Job & External Trigger
 const handleCronCheck = async (req: express.Request, res: express.Response) => {
-  // Verify Vercel Cron header or CRON_SECRET if configured, otherwise allow authenticated/internal invoke
-  const authHeader = req.headers.authorization;
   const cronSecret = process.env.CRON_SECRET;
-  const isVercelCron = req.headers['x-vercel-cron'] === '1';
+  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 
-  if (cronSecret && !isVercelCron) {
-    if (!authHeader || authHeader !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: 'Unauthorized: Valid CRON_SECRET required for automated scheduler execution.' });
+  // 1. Fail closed in production if CRON_SECRET is not configured or insufficiently strong (< 16 chars)
+  if (isProduction && (!cronSecret || cronSecret.trim().length < 16)) {
+    console.error('🚨 [Security Violation] CRON_SECRET is not configured or insufficiently strong (min 16 chars) in production.');
+    return res.status(500).json({
+      error: 'CRON_AUTHENTICATION_NOT_CONFIGURED',
+      message: 'Fail-closed security: Automated scheduler trigger requires a configured CRON_SECRET in production.'
+    });
+  }
+
+  // 2. Validate Authorization header: must match Bearer <CRON_SECRET> or valid Admin/Bureau Officer JWT
+  const authHeader = req.headers.authorization;
+  let isAuthorized = false;
+
+  if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
+    isAuthorized = true;
+  } else if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const jwtSecret = resolveJWTSecret();
+      const token = authHeader.substring(7);
+      const decoded = jwt.verify(token, jwtSecret) as any;
+      if (decoded && (decoded.role === 'admin' || decoded.role === 'bureau_officer')) {
+        isAuthorized = true;
+      }
+    } catch (_) {
+      // Invalid JWT or expired
     }
+  }
+
+  if (!isAuthorized) {
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Authentication required. Scheduled trigger requires valid Bearer CRON_SECRET or authorized Administrator JWT.'
+    });
   }
 
   try {

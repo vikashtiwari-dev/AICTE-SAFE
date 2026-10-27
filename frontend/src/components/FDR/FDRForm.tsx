@@ -105,7 +105,11 @@ export const FDRForm: React.FC<FDRFormProps> = ({
       setValue('purpose', 'Mandatory AICTE Regulatory Security Deposit (AI OCR Extracted)');
 
       setIfscCode(data.ifsc_code);
-      setOcrSuccess(`AI OCR extracted instrument details (${data.confidence_score}% confidence) for ${data.bank_name}. Fields pre-filled.`);
+      if (data.requires_manual_scrutiny && data.uncertain_fields && data.uncertain_fields.length > 0) {
+        setOcrSuccess(`AI OCR extracted instrument details (${data.confidence_score}% confidence). Note: Uncertain fields [${data.uncertain_fields.join(', ')}] require manual scrutiny. Label: OCR Extracted — Not Bank Verified.`);
+      } else {
+        setOcrSuccess(`AI OCR extracted instrument details (${data.confidence_score}% confidence) for ${data.bank_name || 'instrument'}. Status: OCR Extracted — Not Bank Verified.`);
+      }
     } catch (err: any) {
       setError('AI OCR extraction failed. Please enter the values manually.');
     } finally {

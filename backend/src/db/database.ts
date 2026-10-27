@@ -106,11 +106,8 @@ const rawDbUrl =
 
 if (rawDbUrl) {
   try {
-    // Strip sslmode from connection URL so pg-connection-string does not blow away our custom CA configuration
-    const sanitizedDbUrl = rawDbUrl
-      .replace(/([?&])sslmode=[^&]*(&|$)/g, '$1')
-      .replace(/\?&/, '?')
-      .replace(/[?&]$/, '');
+    const { parse: parsePgConn } = require('pg-connection-string');
+    const parsedConn = parsePgConn(rawDbUrl);
 
     // Enforce strict TLS certificate verification with trusted CA chain
     const sslConfig = {
@@ -119,7 +116,11 @@ if (rawDbUrl) {
     };
 
     pgPool = new Pool({
-      connectionString: sanitizedDbUrl,
+      user: parsedConn.user,
+      password: parsedConn.password,
+      host: parsedConn.host || undefined,
+      port: parsedConn.port ? parseInt(parsedConn.port, 10) : 5432,
+      database: parsedConn.database || undefined,
       ssl: sslConfig,
       max: 10,
       idleTimeoutMillis: 30000,

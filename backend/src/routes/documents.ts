@@ -6,142 +6,154 @@ import jwt from 'jsonwebtoken';
 import { db } from '../db/database';
 import { authenticate, AuthRequest, JWT_SECRET } from '../middleware/auth';
 import { UPLOAD_DIR_PATH } from '../middleware/upload';
+import { documentLimiter, sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
+// Strict rate limiting on all confidential document access
+router.use(documentLimiter);
+
 // POST /api/documents/:id/view-token - Generate a short-lived (60s) single-use document token
 router.post('/:id/view-token', authenticate, async (req: AuthRequest, res) => {
-  const doc = await db.queryOne(`
-    SELECT d.id, f.institution_id
-    FROM fdr_documents d
-    JOIN fdrs f ON d.fdr_id = f.id
-    WHERE d.id = ? AND d.is_active = 1
-  `, [req.params.id]) as any;
+  try {
+    const doc = await db.queryOne(`
+      SELECT d.id, f.institution_id
+      FROM fdr_documents d
+      JOIN fdrs f ON d.fdr_id = f.id
+      WHERE d.id = ? AND d.is_active = 1
+    `, [req.params.id]) as any;
 
-  if (!doc) {
-    return res.status(404).json({ error: 'Document not found' });
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    // Authorization check for institution users
+    if (req.user!.role === 'institution_user' && doc.institution_id !== req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied: Clearance required for this institutional record.' });
+    }
+
+    // Generate cryptographically unique JTI to enforce single-use consumption
+    const jti = crypto.randomUUID();
+
+    // Sign a restricted 60-second viewing token tied specifically to this document ID
+    const viewToken = jwt.sign(
+      { docId: doc.id, userId: req.user!.userId, purpose: 'DOCUMENT_STREAM_VIEW', jti },
+      JWT_SECRET,
+      { expiresIn: '60s' }
+    );
+
+    return res.json({ view_token: viewToken, expires_in_seconds: 60, jti });
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Failed to generate view token'));
   }
-
-  // Authorization check for institution users
-  if (req.user!.role === 'institution_user' && doc.institution_id !== req.user!.institution_id) {
-    return res.status(403).json({ error: 'Access denied: Clearance required for this institutional record.' });
-  }
-
-  // Generate cryptographically unique JTI to enforce single-use consumption
-  const jti = crypto.randomUUID();
-
-  // Sign a restricted 60-second viewing token tied specifically to this document ID
-  const viewToken = jwt.sign(
-    { docId: doc.id, userId: req.user!.userId, purpose: 'DOCUMENT_STREAM_VIEW', jti },
-    JWT_SECRET,
-    { expiresIn: '60s' }
-  );
-
-  return res.json({ view_token: viewToken, expires_in_seconds: 60, jti });
 });
 
 // GET /api/documents/stream/:id - Secure, authorized document streaming
 router.get('/stream/:id', async (req: any, res) => {
-  // Support either standard Authorization header OR short-lived single-use view token
-  let authenticatedUser: any = null;
+  try {
+    // Support either standard Authorization header OR short-lived single-use view token
+    let authenticatedUser: any = null;
 
-  const authHeader = req.headers.authorization;
-  const queryToken = req.query.token || req.query.viewToken;
+    const authHeader = req.headers.authorization;
+    const queryToken = req.query.token || req.query.viewToken;
 
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    try {
-      authenticatedUser = jwt.verify(authHeader.substring(7), JWT_SECRET);
-    } catch (_) {}
-  } else if (queryToken && typeof queryToken === 'string') {
-    try {
-      const payload = jwt.verify(queryToken, JWT_SECRET) as any;
-      // If single-use document view token, ensure it matches this specific document
-      if (payload.purpose === 'DOCUMENT_STREAM_VIEW') {
-        if (Number(payload.docId) !== Number(req.params.id)) {
-          return res.status(403).json({ error: 'Security violation: View token does not match requested document.' });
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        authenticatedUser = jwt.verify(authHeader.substring(7), JWT_SECRET);
+      } catch (_) {}
+    } else if (queryToken && typeof queryToken === 'string') {
+      try {
+        const payload = jwt.verify(queryToken, JWT_SECRET) as any;
+        // If single-use document view token, ensure it matches this specific document
+        if (payload.purpose === 'DOCUMENT_STREAM_VIEW') {
+          if (Number(payload.docId) !== Number(req.params.id)) {
+            return res.status(403).json({ error: 'Security violation: View token does not match requested document.' });
+          }
+          if (!payload.jti) {
+            return res.status(403).json({ error: 'Security violation: View token is missing unique single-use JTI identifier.' });
+          }
+
+          // Atomically claim single-use token; conflict strictly rejects replay
+          const consumeRes = await db.execute(
+            'INSERT INTO consumed_view_tokens (token_jti, document_id) VALUES (?, ?) ON CONFLICT (token_jti) DO NOTHING',
+            [payload.jti, Number(payload.docId)]
+          );
+
+          if (consumeRes.changes === 0) {
+            return res.status(403).json({ error: 'Security violation: This single-use view token has already been consumed.' });
+          }
         }
-        if (!payload.jti) {
-          return res.status(403).json({ error: 'Security violation: View token is missing unique single-use JTI identifier.' });
-        }
+        authenticatedUser = payload;
+      } catch (_) {}
+    }
 
-        // Atomically claim single-use token; conflict strictly rejects replay
-        const consumeRes = await db.execute(
-          'INSERT INTO consumed_view_tokens (token_jti, document_id) VALUES (?, ?) ON CONFLICT (token_jti) DO NOTHING',
-          [payload.jti, Number(payload.docId)]
-        );
+    if (!authenticatedUser) {
+      return res.status(401).json({ error: 'Unauthorized: Valid authentication token or view token required to access financial records.' });
+    }
 
-        if (consumeRes.changes === 0) {
-          return res.status(403).json({ error: 'Security violation: This single-use view token has already been consumed.' });
-        }
+    const doc = await db.queryOne(`
+      SELECT d.*, f.institution_id, f.fdr_number
+      FROM fdr_documents d
+      JOIN fdrs f ON d.fdr_id = f.id
+      WHERE d.id = ? AND d.is_active = 1
+    `, [req.params.id]) as any;
+
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found or has been revoked' });
+    }
+
+    // Institution isolation check
+    if (authenticatedUser.role === 'institution_user' && doc.institution_id !== authenticatedUser.institution_id) {
+      return res.status(403).json({ error: 'Access denied: You do not possess clearance for this institutional record.' });
+    }
+
+    // 1. Durably stream from cloud database payload (PostgreSQL bytea) if available
+    const payloadRow = await db.queryOne(
+      'SELECT data, mime_type, file_name FROM document_payloads WHERE fdr_document_id = ?',
+      [doc.id]
+    );
+
+    if (payloadRow && payloadRow.data) {
+      const mimeType = payloadRow.mime_type || doc.mime_type || 'application/pdf';
+      const buf = Buffer.isBuffer(payloadRow.data) ? payloadRow.data : Buffer.from(payloadRow.data);
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Length', buf.length);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name)}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+      return res.end(buf);
+    }
+
+    // 2. In production / cloud serverless, require durable cloud byte payload
+    if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+      return res.status(404).json({ error: 'Document payload not found in durable cloud storage.' });
+    }
+
+    // 3. Fallback to local filesystem path ONLY for offline local development
+    let targetPath = path.isAbsolute(doc.file_path)
+      ? doc.file_path
+      : path.join(UPLOAD_DIR_PATH, doc.file_path);
+
+    if (!fs.existsSync(targetPath)) {
+      const fallbackPath = path.join(UPLOAD_DIR_PATH, doc.file_name);
+      if (fs.existsSync(fallbackPath)) {
+        targetPath = fallbackPath;
+      } else {
+        return res.status(404).json({ error: 'Document file not found on secure storage server.' });
       }
-      authenticatedUser = payload;
-    } catch (_) {}
-  }
+    }
 
-  if (!authenticatedUser) {
-    return res.status(401).json({ error: 'Unauthorized: Valid authentication token or view token required to access financial records.' });
-  }
-
-  const doc = await db.queryOne(`
-    SELECT d.*, f.institution_id, f.fdr_number
-    FROM fdr_documents d
-    JOIN fdrs f ON d.fdr_id = f.id
-    WHERE d.id = ? AND d.is_active = 1
-  `, [req.params.id]) as any;
-
-  if (!doc) {
-    return res.status(404).json({ error: 'Document not found or has been revoked' });
-  }
-
-  // Institution isolation check
-  if (authenticatedUser.role === 'institution_user' && doc.institution_id !== authenticatedUser.institution_id) {
-    return res.status(403).json({ error: 'Access denied: You do not possess clearance for this institutional record.' });
-  }
-
-  // 1. Durably stream from cloud database payload (PostgreSQL bytea) if available
-  const payloadRow = await db.queryOne(
-    'SELECT data, mime_type, file_name FROM document_payloads WHERE fdr_document_id = ?',
-    [doc.id]
-  );
-
-  if (payloadRow && payloadRow.data) {
-    const mimeType = payloadRow.mime_type || doc.mime_type || 'application/pdf';
-    const buf = Buffer.isBuffer(payloadRow.data) ? payloadRow.data : Buffer.from(payloadRow.data);
+    const mimeType = doc.mime_type || 'application/pdf';
     res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Length', buf.length);
     res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name)}"`);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-    return res.end(buf);
+
+    const readStream = fs.createReadStream(targetPath);
+    readStream.pipe(res);
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Failed to stream document payload'));
   }
-
-  // 2. In production / cloud serverless, require durable cloud byte payload
-  if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ error: 'Document payload not found in durable cloud storage.' });
-  }
-
-  // 3. Fallback to local filesystem path ONLY for offline local development
-  let targetPath = path.isAbsolute(doc.file_path)
-    ? doc.file_path
-    : path.join(UPLOAD_DIR_PATH, doc.file_path);
-
-  if (!fs.existsSync(targetPath)) {
-    const fallbackPath = path.join(UPLOAD_DIR_PATH, doc.file_name);
-    if (fs.existsSync(fallbackPath)) {
-      targetPath = fallbackPath;
-    } else {
-      return res.status(404).json({ error: 'Document file not found on secure storage server.' });
-    }
-  }
-
-  const mimeType = doc.mime_type || 'application/pdf';
-  res.setHeader('Content-Type', mimeType);
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name)}"`);
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-
-  const readStream = fs.createReadStream(targetPath);
-  readStream.pipe(res);
 });
 
 export default router;

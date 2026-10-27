@@ -2,6 +2,7 @@ import express from 'express';
 import { db } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { dispatchStatutoryNudges } from '../services/alertService';
+import { sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
@@ -50,7 +51,7 @@ router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_offic
       message: `Statutory multi-channel maturity scan completed. Processed ${nudgesProcessed} channel notifications (live gateways dispatched where configured; unverified contacts flagged).`
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to dispatch statutory nudges', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to dispatch statutory nudges'));
   }
 });
 

@@ -1,6 +1,7 @@
 import express from 'express';
 import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
@@ -103,7 +104,7 @@ router.post('/requests', async (req, res) => {
       request: createdReq
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to submit onboarding request', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to submit onboarding request'));
   }
 });
 
@@ -169,7 +170,7 @@ router.patch('/requests/:id/approve', authenticate, requireRole(['admin', 'burea
       institution: newInstitution
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to approve onboarding request', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to approve onboarding request'));
   }
 });
 
@@ -208,7 +209,7 @@ router.patch('/requests/:id/reject', authenticate, requireRole(['admin', 'bureau
 
     return res.json({ message: 'Institution onboarding request rejected.', remarks });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to reject request', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to reject request'));
   }
 });
 
@@ -232,7 +233,7 @@ router.post('/', authenticate, requireRole(['admin']), async (req: AuthRequest, 
     if (err.message && err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'AICTE ID already registered' });
     }
-    return res.status(500).json({ error: 'Failed to create institution', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to create institution'));
   }
 });
 

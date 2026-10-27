@@ -1,6 +1,7 @@
 import express from 'express';
 import { db, verifyAuditChain } from '../db/database';
 import { authenticate, AuthRequest, maskAccountNumber } from '../middleware/auth';
+import { sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
@@ -391,7 +392,7 @@ router.get('/verify-audit-chain', authenticate, async (req: AuthRequest, res) =>
       verified_by: req.user?.username || 'SYSTEM'
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to verify audit ledger chain', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to verify audit ledger chain'));
   }
 });
 

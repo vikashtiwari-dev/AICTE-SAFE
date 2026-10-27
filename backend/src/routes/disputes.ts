@@ -1,6 +1,7 @@
 import express from 'express';
 import { db, executeMutation } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
@@ -115,7 +116,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer']), async (
 
     return res.status(201).json({ id: ticketId, message: 'Dispute ticket opened and recorded in cloud registry.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to open dispute ticket', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to open dispute ticket'));
   }
 });
 
@@ -151,7 +152,7 @@ router.post('/:id/messages', authenticate, async (req: AuthRequest, res) => {
 
     return res.status(201).json({ success: true });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to post message', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to post message'));
   }
 });
 
@@ -183,7 +184,7 @@ router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer
 
     return res.json({ success: true, message: 'Dispute marked as Resolved and FDR verification restored.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to resolve dispute', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to resolve dispute'));
   }
 });
 

@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { validateLockInEligibility } from '../services/aphService';
+import { verificationLimiter, sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
@@ -110,12 +111,12 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
 
     return res.status(201).json(createdRequest);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to create release request' });
+    return res.status(500).json(sanitizeError(err, 'Failed to create release request'));
   }
 });
 
-// PATCH /api/releases/:id/tier-review - Strictly Enforced Maker-Checker Multi-Tier Workflow
-router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
+// PATCH /api/releases/:id/tier-review - Strictly Enforced Maker-Checker Multi-Tier Workflow (Rate limited)
+router.patch('/:id/tier-review', verificationLimiter, authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const { stage, remarks, decision = 'FORWARD' } = req.body;
   const request = await db.prepare('SELECT r.*, f.fdr_number, f.deposit_amount FROM release_requests r JOIN fdrs f ON r.fdr_id = f.id WHERE r.id = ?').get(req.params.id) as any;
   if (!request) return res.status(404).json({ error: 'Release request not found' });
@@ -213,8 +214,8 @@ router.patch('/:id/tier-review', authenticate, requireRole(['admin', 'bureau_off
   }
 });
 
-// POST /api/releases/:id/dsc-sign - Statutory Order Attestation Seal (Director / Competent Authority only)
-router.post('/:id/dsc-sign', authenticate, requireRole(['admin']), async (req: AuthRequest, res) => {
+// POST /api/releases/:id/dsc-sign - Statutory Order Attestation Seal (Director / Competent Authority only, Rate limited)
+router.post('/:id/dsc-sign', verificationLimiter, authenticate, requireRole(['admin']), async (req: AuthRequest, res) => {
   // Derive signer identity strictly from database record of authenticated session - ignore client body
   const signingUser = await db.queryOne('SELECT id, full_name, role FROM users WHERE id = ?', [req.user!.userId]) as any;
   const signerName = signingUser?.full_name || req.user!.username || 'Director, AICTE Regulation Bureau';
@@ -288,12 +289,12 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin']), async (req: A
       legal_disclosure: 'Statutory Electronic Approval Attestation (Section 10(k) AICTE Act Audit Trail) - Prototype Seal. Note: This cryptographic digest provides immutable record integrity within the portal ledger; it does not replace an IT Act 2000 licensed Certifying Authority (CCA) Class-3 DSC token.'
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Approval order failed to record in cloud database' });
+    return res.status(500).json(sanitizeError(err, 'Approval order failed to record in cloud database'));
   }
 });
 
-// PATCH /api/releases/:id/complete - Discharge & Release Instrument (Requires Prior Approval)
-router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
+// PATCH /api/releases/:id/complete - Discharge & Release Instrument (Requires Prior Approval, Rate limited)
+router.patch('/:id/complete', verificationLimiter, authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const request = await db.prepare('SELECT * FROM release_requests WHERE id = ?').get(req.params.id) as any;
   if (!request) return res.status(404).json({ error: 'Release request not found' });
 
@@ -382,7 +383,7 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
       regulatory_notice: 'Lien discharge recorded in AICTE portal registry. Physical instrument encashment and physical lien cancellation must be completed directly with the issuing bank branch.'
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Discharge transaction failed' });
+    return res.status(500).json(sanitizeError(err, 'Discharge transaction failed'));
   }
 });
 

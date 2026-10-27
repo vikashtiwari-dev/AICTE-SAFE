@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import crypto from 'crypto';
 import { db } from '../db/database';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { verificationLimiter, sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
@@ -44,23 +45,24 @@ function numberToIndianWords(num: number): string {
   return 'Rupees ' + inWords(Math.floor(num)).trim() + ' Only';
 }
 
-// GET /api/certificates/:formType/:fdrId - Generate or retrieve statutory certificate
-router.get('/:formType/:fdrId', authenticate, async (req: AuthRequest, res) => {
-  const { formType, fdrId } = req.params;
+// GET /api/certificates/:formType/:fdrId - Generate or retrieve statutory certificate (Rate limited)
+router.get('/:formType/:fdrId', verificationLimiter, authenticate, async (req: AuthRequest, res) => {
+  try {
+    const { formType, fdrId } = req.params;
 
-  const fdr = await db.prepare(`
-    SELECT f.*, i.name as institution_name, i.aicte_id, i.address, i.city, i.state
-    FROM fdrs f
-    JOIN institutions i ON f.institution_id = i.id
-    WHERE f.id = ?
-  `).get(fdrId) as any;
+    const fdr = await db.prepare(`
+      SELECT f.*, i.name as institution_name, i.aicte_id, i.address, i.city, i.state
+      FROM fdrs f
+      JOIN institutions i ON f.institution_id = i.id
+      WHERE f.id = ?
+    `).get(fdrId) as any;
 
-  if (!fdr) return res.status(404).json({ error: 'FDR not found' });
+    if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 
-  // Role check
-  if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+    // Role check
+    if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
   const certTypeKey = (formType || 'FORM_C').toUpperCase();
   const certNumber = `AICTE/CERT/${certTypeKey}/${fdr.id}/${new Date().getFullYear()}`;
@@ -152,39 +154,46 @@ router.get('/:formType/:fdrId', authenticate, async (req: AuthRequest, res) => {
   };
 
   return res.json(certificate);
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Failed to generate statutory certificate'));
+  }
 });
 
-// GET /api/certificates/verify/:certNumber - Public verification check
-router.get('/verify/:certNumber', async (req, res) => {
-  const certNumber = decodeURIComponent(req.params.certNumber);
-  const cert = await db.prepare(`
-    SELECT sc.*, f.fdr_number, f.deposit_amount, f.bank_name, i.name as inst_name, i.aicte_id
-    FROM statutory_certificates sc
-    JOIN fdrs f ON sc.fdr_id = f.id
-    JOIN institutions i ON sc.institution_id = i.id
-    WHERE sc.certificate_number = ?
-  `).get(certNumber) as any;
+// GET /api/certificates/verify/:certNumber - Public verification check (Rate limited)
+router.get('/verify/:certNumber', verificationLimiter, async (req, res) => {
+  try {
+    const certNumber = decodeURIComponent(req.params.certNumber);
+    const cert = await db.prepare(`
+      SELECT sc.*, f.fdr_number, f.deposit_amount, f.bank_name, i.name as inst_name, i.aicte_id
+      FROM statutory_certificates sc
+      JOIN fdrs f ON sc.fdr_id = f.id
+      JOIN institutions i ON sc.institution_id = i.id
+      WHERE sc.certificate_number = ?
+    `).get(certNumber) as any;
 
-  if (!cert) {
-    return res.status(404).json({
-      verified: false,
-      message: `Certificate "${certNumber}" is not recorded in the official AICTE National Register.`
+    if (!cert) {
+      return res.status(404).json({
+        verified: false,
+        message: `Certificate "${certNumber}" is not recorded in the official AICTE National Register.`
+      });
+    }
+
+    return res.json({
+      verified: true,
+      certificate_number: cert.certificate_number,
+      certificate_type: cert.certificate_type,
+      issued_at: cert.issued_at,
+      institution: cert.inst_name,
+      aicte_id: cert.aicte_id,
+      fdr_number: cert.fdr_number,
+      bank_name: cert.bank_name,
+      deposit_amount: cert.deposit_amount,
+      dsc_sign_hash: cert.dsc_sign_hash,
+      status: 'OFFICIALLY_AUTHENTICATED'
     });
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Certificate verification query failed'));
   }
-
-  return res.json({
-    verified: true,
-    certificate_number: cert.certificate_number,
-    certificate_type: cert.certificate_type,
-    issued_at: cert.issued_at,
-    institution: cert.inst_name,
-    aicte_id: cert.aicte_id,
-    fdr_number: cert.fdr_number,
-    bank_name: cert.bank_name,
-    deposit_amount: cert.deposit_amount,
-    dsc_sign_hash: cert.dsc_sign_hash,
-    status: 'OFFICIALLY_AUTHENTICATED'
-  });
 });
 
 export default router;

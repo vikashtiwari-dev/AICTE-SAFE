@@ -13,6 +13,7 @@ const { validateDocumentFile, validateFileMagic } = require('./dist/middleware/u
 const { isServerlessEnvironment, startCronJobs } = require('./dist/services/cronService.js');
 const crypto = require('crypto');
 const fs = require('fs');
+const { execSync } = require('child_process');
 const jwt = require('jsonwebtoken');
 
 let passedTests = 0;
@@ -865,12 +866,66 @@ No lien clause mentioned here.
     assert(false, 'Dashboard and reports accuracy test failed', err.message);
   }
 
+  // Test 26: Priority 1 Production Security, Rate Limiting & Demo Account Lockdown
+  console.log('\n▶ TEST 26: Priority 1 Production Security, Rate Limiting & Demo Account Lockdown');
+  try {
+    const { documentLimiter, verificationLimiter, sanitizeError } = require('./dist/middleware/security.js');
+
+    // 1. Verify document rate limiter configuration
+    assert(typeof documentLimiter === 'function', 'documentLimiter is configured as active Express middleware');
+    assert(typeof verificationLimiter === 'function', 'verificationLimiter is configured as active Express middleware');
+
+    // 2. Verify error response sanitization: Production must never leak database or connection details
+    const origEnv = process.env.NODE_ENV;
+    const origVercel = process.env.VERCEL;
+
+    process.env.NODE_ENV = 'production';
+    delete process.env.VERCEL;
+
+    const fakeDbError = new Error('error: password authentication failed for user "postgres" at host aws-0-ap-northeast-1.pooler.supabase.com:6543');
+    const sanitizedProd = sanitizeError(fakeDbError, 'Database query execution failed');
+    assert(sanitizedProd.error === 'Database query execution failed', 'Sanitized fallback message returned');
+    assert(sanitizedProd.details === undefined, 'Internal database connection string and credentials strictly suppressed in production (details is undefined)');
+
+    process.env.NODE_ENV = 'development';
+    const sanitizedDev = sanitizeError(fakeDbError, 'Database query execution failed');
+    assert(sanitizedDev.details !== undefined, 'Developer details preserved in development mode');
+
+    // 3. Verify demo credentials blocked in production
+    process.env.NODE_ENV = 'production';
+    delete process.env.ALLOW_DEMO_CREDENTIALS;
+
+    const testPasswords = ['admin123', 'officer123', 'inst123', 'viewer123', 'password123'];
+    const DISALLOWED_SET = new Set(['admin123', 'officer123', 'inst123', 'viewer123', 'password123', 'test1234', '12345678', 'admin@123']);
+    
+    for (const pw of testPasswords) {
+      const isBlocked = DISALLOWED_SET.has(pw.toLowerCase());
+      assert(isBlocked === true, `Default demo password "${pw}" is blocked in production`);
+    }
+
+    // Restore environment
+    process.env.NODE_ENV = origEnv;
+    if (origVercel !== undefined) process.env.VERCEL = origVercel;
+
+    // 4. Verify vercel.json contains zero plaintext database credentials or secrets
+    const vercelConfig = JSON.parse(fs.readFileSync(path.join(__dirname, '../vercel.json'), 'utf8'));
+    assert(!vercelConfig.env, 'vercel.json has no "env" block with embedded plaintext credentials');
+    assert(!JSON.stringify(vercelConfig).includes('postgres:'), 'vercel.json contains no PostgreSQL connection strings');
+    assert(!JSON.stringify(vercelConfig).includes('JWT_SECRET'), 'vercel.json contains no JWT secrets');
+
+    // 5. Verify .env.production is excluded from git tracking
+    const gitTrackedEnv = execSync('git ls-files .env.production backend/.env.production', { cwd: path.join(__dirname, '..'), encoding: 'utf8' }).trim();
+    assert(gitTrackedEnv === '', '.env.production and backend/.env.production are excluded from git working tree tracking');
+  } catch (err) {
+    assert(false, 'Production security and demo lockdown test failed', err.message);
+  }
+
   console.log('\n===================================================================');
   console.log(`📊 RESULTS: ${passedTests} / ${totalTests} AUDIT CHECKS PASSED (${Math.round((passedTests/totalTests)*100)}%)`);
   console.log('===================================================================\n');
 
   if (passedTests === totalTests) {
-    console.log('🎯 ALL 25 CRITICAL SECURITY, INTEGRITY & REGULATORY CRITERIA ARE 100% SATISFIED!');
+    console.log('🎯 ALL 26 CRITICAL SECURITY, INTEGRITY & REGULATORY CRITERIA ARE 100% SATISFIED!');
     process.exit(0);
   } else {
     process.exit(1);

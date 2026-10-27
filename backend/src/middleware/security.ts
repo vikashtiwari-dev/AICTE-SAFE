@@ -13,6 +13,30 @@ export const authLimiter = rateLimit({
   }
 });
 
+// Strict rate limiter for confidential document streaming and view token generation
+export const documentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 document operations per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Document access rate limit exceeded. Please wait before streaming additional financial records.',
+    status: 429
+  }
+});
+
+// Strict rate limiter for sensitive regulatory verification, OCR extraction, and release orders
+export const verificationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 60, // 60 verification actions per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Regulatory verification request threshold exceeded. Please throttle verification queries.',
+    status: 429
+  }
+});
+
 // Standard API rate limiter for general regulatory endpoints
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -24,6 +48,18 @@ export const apiLimiter = rateLimit({
     status: 429
   }
 });
+
+/**
+ * Sanitizes server error responses:
+ * In production, strips internal database connection details, credentials, and SQL syntax details.
+ */
+export function sanitizeError(err: any, fallbackMessage: string): { error: string; details?: string } {
+  const isProduction = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+  if (isProduction) {
+    return { error: fallbackMessage };
+  }
+  return { error: fallbackMessage, details: err?.message || String(err) };
+}
 
 // Production-ready Helmet security headers conforming to GIGW & IT Act standards
 export const securityHeaders = helmet({
@@ -42,4 +78,3 @@ export const securityHeaders = helmet({
   crossOriginEmbedderPolicy: false,
   crossOriginResourcePolicy: { policy: "cross-origin" }
 });
-

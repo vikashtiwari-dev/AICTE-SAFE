@@ -6,11 +6,13 @@ import { ShieldCheck, Lock, User as UserIcon, AlertCircle, Building2 } from 'luc
 import { InstitutionRequestModal } from '../components/InstitutionRequestModal';
 
 export const Login: React.FC = () => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState(false);
+
+  const isDemoMode = import.meta.env.DEV || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) || import.meta.env.VITE_ENABLE_DEMO_PERSONAS === 'true';
 
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -125,46 +127,54 @@ export const Login: React.FC = () => {
             </button>
           </div>
 
-          {/* Demo Credentials Pill Selectors */}
-          <div className="mt-8 pt-6 border-t border-slate-100">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3 text-center">
-              Quick Demo Personas
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => handleDemoFill('admin', 'admin123')}
-                className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
-              >
-                <div className="font-semibold text-slate-800 group-hover:text-blue-600">Administrator</div>
-                <div className="text-[10px] text-slate-400">admin / admin123</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDemoFill('officer1', 'officer123')}
-                className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
-              >
-                <div className="font-semibold text-slate-800 group-hover:text-blue-600">Bureau Officer</div>
-                <div className="text-[10px] text-slate-400">officer1 / officer123</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDemoFill('inst_user1', 'inst123')}
-                className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
-              >
-                <div className="font-semibold text-slate-800 group-hover:text-blue-600">Institution User</div>
-                <div className="text-[10px] text-slate-400">inst_user1 / inst123</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleDemoFill('viewer1', 'viewer123')}
-                className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
-              >
-                <div className="font-semibold text-slate-800 group-hover:text-blue-600">Audit Viewer</div>
-                <div className="text-[10px] text-slate-400">viewer1 / viewer123</div>
-              </button>
+          {/* Demo Credentials Pill Selectors (Hidden in Production) */}
+          {isDemoMode ? (
+            <div className="mt-8 pt-6 border-t border-slate-100">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-3 text-center">
+                Quick Demo Personas (Development Mode)
+              </p>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => handleDemoFill('admin', 'admin123')}
+                  className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
+                >
+                  <div className="font-semibold text-slate-800 group-hover:text-blue-600">Administrator</div>
+                  <div className="text-[10px] text-slate-400">admin / admin123</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemoFill('officer1', 'officer123')}
+                  className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
+                >
+                  <div className="font-semibold text-slate-800 group-hover:text-blue-600">Bureau Officer</div>
+                  <div className="text-[10px] text-slate-400">officer1 / officer123</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemoFill('inst_user1', 'inst123')}
+                  className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
+                >
+                  <div className="font-semibold text-slate-800 group-hover:text-blue-600">Institution User</div>
+                  <div className="text-[10px] text-slate-400">inst_user1 / inst123</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemoFill('viewer1', 'viewer123')}
+                  className="p-2 border border-slate-200 rounded-lg text-left hover:border-blue-500 hover:bg-blue-50/50 transition-colors group"
+                >
+                  <div className="font-semibold text-slate-800 group-hover:text-blue-600">Audit Viewer</div>
+                  <div className="text-[10px] text-slate-400">viewer1 / viewer123</div>
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="mt-8 pt-6 border-t border-slate-100 text-center">
+              <p className="text-[11px] text-slate-400">
+                🔒 Production Mode: Default demo accounts disabled. Authenticate with registered institutional credentials.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Footer */}

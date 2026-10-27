@@ -2,6 +2,7 @@ import express from 'express';
 import { db, executeMutation } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
 import { upload } from '../middleware/upload';
+import { sanitizeError } from '../middleware/security';
 import fs from 'fs';
 
 const router = express.Router();
@@ -42,7 +43,7 @@ router.post('/upload', authenticate, requireRole(['admin', 'bureau_officer']), u
   try {
     content = fs.readFileSync(req.file.path, 'utf-8');
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to read uploaded file', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to read uploaded file'));
   }
 
   const lines = content.split(/\r?\n/).filter(line => line.trim().length > 0);

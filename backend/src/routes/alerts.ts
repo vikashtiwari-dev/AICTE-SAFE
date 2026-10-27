@@ -2,6 +2,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { db, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest, resolveJWTSecret } from '../middleware/auth';
+import { sanitizeError } from '../middleware/security';
 import { generateAlerts, dispatchStatutoryNudges, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
 
 const router = express.Router();
@@ -59,7 +60,7 @@ const handleCronCheck = async (req: express.Request, res: express.Response) => {
       notes: 'Monitors 90/30/10-day maturity windows, discrepancy flags, overdue lock-in violations, and multi-channel statutory reminders.'
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Cron execution failed', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Cron execution failed'));
   }
 };
 
@@ -142,7 +143,7 @@ router.patch('/:id/resolve', authenticate, requireRole(['admin', 'bureau_officer
 
     return res.json({ success: true, message: 'Alert marked resolved in national compliance registry.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to resolve alert', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to resolve alert'));
   }
 });
 

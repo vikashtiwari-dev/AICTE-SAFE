@@ -8,11 +8,12 @@ import { upload, validateFileMagic, validateDocumentFile } from '../middleware/u
 import { lookupIFSC, verifyNeSLeBG, validateSFMS_IFN760 } from '../services/bankingService';
 import { extractFDRFromDocument } from '../services/ocrService';
 import { calculateRequiredDeposit, validateLockInEligibility } from '../services/aphService';
+import { verificationLimiter, documentLimiter, sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
 // POST /api/fdrs/ocr-extract - Honest AI / OCR entity extraction with mathematical confidence
-router.post('/ocr-extract', authenticate, upload.single('file'), async (req: AuthRequest, res) => {
+router.post('/ocr-extract', verificationLimiter, authenticate, upload.single('file'), async (req: AuthRequest, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG)' });
@@ -53,12 +54,12 @@ router.get('/validate-ifsc/:ifsc', async (req, res) => {
     }
     return res.json(result);
   } catch (err: any) {
-    return res.status(500).json({ valid: false, error: err.message });
+    return res.status(500).json(sanitizeError(err, 'IFSC directory lookup failed'));
   }
 });
 
-// POST /api/fdrs/verify-nesl - NeSL Electronic Bank Guarantee (e-BG) Verification
-router.post('/verify-nesl', authenticate, (req: AuthRequest, res) => {
+// POST /api/fdrs/verify-nesl - NeSL Electronic Bank Guarantee (e-BG) Verification (Rate limited)
+router.post('/verify-nesl', verificationLimiter, authenticate, (req: AuthRequest, res) => {
   const { nesl_identifier, deposit_amount, bank_name } = req.body;
   if (!nesl_identifier) {
     return res.status(400).json({ error: 'NeSL Identifier reference is required (e.g. NESL-2024-BG-889912)' });
@@ -74,8 +75,8 @@ router.post('/verify-nesl', authenticate, (req: AuthRequest, res) => {
   return res.json(result);
 });
 
-// POST /api/fdrs/verify-sfms - SFMS IFN 760 Structured Financial Message Verification
-router.post('/verify-sfms', authenticate, (req: AuthRequest, res) => {
+// POST /api/fdrs/verify-sfms - SFMS IFN 760 Structured Financial Message Verification (Rate limited)
+router.post('/verify-sfms', verificationLimiter, authenticate, (req: AuthRequest, res) => {
   const { sfms_message } = req.body;
   if (!sfms_message) {
     return res.status(400).json({ error: 'SFMS Raw Message block is required for parsing' });
@@ -311,7 +312,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
     if (err.code === '23505' || (err.message && (err.message.includes('UNIQUE') || err.message.includes('unique constraint') || err.message.includes('duplicate key')))) {
       return res.status(409).json({ error: `FDR number "${fdr_number}" already exists in the national database.` });
     }
-    return res.status(500).json({ error: 'Failed to create FDR in cloud database', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to create FDR in cloud database'));
   }
 });
 
@@ -403,12 +404,12 @@ router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async
 
     return res.json(updated);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to update FDR in cloud database', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to update FDR in cloud database'));
   }
 });
 
-// PATCH /api/fdrs/:id/verify - Strictly enforce verification policy & require uploaded evidence & method
-router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
+// PATCH /api/fdrs/:id/verify - Strictly enforce verification policy & require uploaded evidence & method (Rate limited)
+router.patch('/:id/verify', verificationLimiter, authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
   const { verification_status, verification_notes, verification_method } = req.body;
   const fdr = await db.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
@@ -482,12 +483,12 @@ router.patch('/:id/verify', authenticate, requireRole(['admin', 'bureau_officer'
 
     return res.json({ success: true, verification_status, fdr_status: newFdrStatus, verification_method });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Verification update failed' });
+    return res.status(500).json(sanitizeError(err, 'Verification update failed'));
   }
 });
 
-// POST /api/fdrs/:id/documents - Upload with strict institution ownership verification
-router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']),
+// POST /api/fdrs/:id/documents - Upload with strict institution ownership verification (Rate limited)
+router.post('/:id/documents', documentLimiter, authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']),
   upload.single('file'), async (req: AuthRequest, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
@@ -566,7 +567,7 @@ router.post('/:id/documents', authenticate, requireRole(['admin', 'bureau_office
 
       return res.status(201).json(createdDoc);
     } catch (err: any) {
-      return res.status(500).json({ error: 'Failed to record document metadata', details: err.message });
+      return res.status(500).json(sanitizeError(err, 'Failed to record document metadata'));
     }
   });
 
@@ -607,7 +608,7 @@ router.delete('/:id/documents/:docId', authenticate, requireRole(['admin', 'bure
     });
     return res.json({ success: true });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Document deletion failed', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Document deletion failed'));
   }
 });
 

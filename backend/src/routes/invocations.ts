@@ -1,6 +1,7 @@
 import express from 'express';
 import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
+import { sanitizeError } from '../middleware/security';
 
 const router = express.Router();
 
@@ -119,7 +120,7 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer']), async (
 
     return res.status(201).json(createdInv);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to initiate lien invocation', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to initiate lien invocation'));
   }
 });
 
@@ -162,7 +163,7 @@ router.post('/:id/show-cause', authenticate, requireRole(['admin', 'bureau_offic
       message: `Statutory Show-Cause Notice served with mandatory cure deadline of ${deadline}.`
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to issue show cause notice', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to issue show cause notice'));
   }
 });
 
@@ -200,7 +201,7 @@ router.post('/:id/serve-demand', authenticate, requireRole(['admin', 'bureau_off
       message: 'Official Bank Encashment Order served under Section 10 of AICTE Act, 1987.'
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to serve bank demand', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to serve bank demand'));
   }
 });
 
@@ -252,7 +253,7 @@ router.patch('/:id/confirm-recovery', authenticate, requireRole(['admin', 'burea
       message: `Security deposit of ₹${Number(inv.invocation_amount || 0).toLocaleString('en-IN')} successfully encashed and credited to Council Consolidated Fund.`
     });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to confirm remittance recovery', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to confirm remittance recovery'));
   }
 });
 
@@ -284,7 +285,7 @@ router.patch('/:id/drop', authenticate, requireRole(['admin']), async (req: Auth
 
     return res.json({ success: true, message: 'Lien Invocation dropped. FDR restored to Active status.' });
   } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to drop invocation', details: err.message });
+    return res.status(500).json(sanitizeError(err, 'Failed to drop invocation'));
   }
 });
 

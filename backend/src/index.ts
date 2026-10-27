@@ -7,7 +7,7 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
-import { initializeDatabase } from './db/database';
+import { initializeDatabase, db } from './db/database';
 import { startCronJobs } from './services/cronService';
 import { securityHeaders, apiLimiter } from './middleware/security';
 
@@ -97,12 +97,24 @@ export function ensureDbInitialized(): Promise<void> {
   return dbInitPromise;
 }
 
-// Health check responds immediately for cloud serverless monitors
-app.get('/api/health', (_req, res) => {
+// Health check verifies service and database connectivity for cloud serverless monitors
+app.get('/api/health', async (_req, res) => {
+  let dbStatus = 'untested';
+  let dbError = null;
+  try {
+    const row = await db.queryOne('SELECT 1 as connected');
+    dbStatus = row ? 'connected' : 'no_rows';
+  } catch (err: any) {
+    dbStatus = 'error';
+    dbError = err.message;
+  }
+
   res.json({
     status: 'ok',
     service: 'AICTE SAFE: Secure Automated FDR & Deposit Engine',
     database: 'PostgreSQL Sole Source of Truth',
+    db_status: dbStatus,
+    db_error: dbError,
     timestamp: new Date().toISOString()
   });
 });

@@ -79,18 +79,24 @@ ccaawiv1PA2Tl253LdQaYv6VcJ5mh1jobznRBkfHen2kDgt17YKJW3ttLzaCMiLu
 cCQq7WEcSzy2kH6DWMkWoF0zbg==
 -----END CERTIFICATE-----`;
 
-export const SUPABASE_CA_BUNDLE = [SUPABASE_ROOT_CA, SUPABASE_INTERMEDIATE_CA].join('\n');
+export const SUPABASE_CA_BUNDLE = [SUPABASE_INTERMEDIATE_CA, SUPABASE_ROOT_CA].join('\n');
 
-export function getTrustedCABundle(): string {
-  const parts = [SUPABASE_ROOT_CA, SUPABASE_INTERMEDIATE_CA];
+export function getTrustedCABundleArray(): string[] {
+  const parts = [SUPABASE_INTERMEDIATE_CA, SUPABASE_ROOT_CA];
   if (process.env.DATABASE_CA && process.env.DATABASE_CA.trim().length > 50) {
     let customCa = process.env.DATABASE_CA.trim();
     if (customCa.includes('\\n')) {
       customCa = customCa.replace(/\\n/g, '\n');
     }
-    parts.push(customCa);
+    if (customCa.includes('BEGIN CERTIFICATE')) {
+      parts.push(customCa);
+    }
   }
-  return parts.join('\n');
+  return parts;
+}
+
+export function getTrustedCABundle(): string {
+  return getTrustedCABundleArray().join('\n');
 }
 
 let pgPool: Pool | null = null;
@@ -111,7 +117,7 @@ if (rawDbUrl) {
 
     // Enforce strict TLS certificate verification with trusted CA chain
     const sslConfig = {
-      ca: getTrustedCABundle(),
+      ca: getTrustedCABundleArray(),
       rejectUnauthorized: true,
     };
 

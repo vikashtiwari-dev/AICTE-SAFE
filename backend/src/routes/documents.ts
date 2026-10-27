@@ -49,21 +49,21 @@ router.post('/:id/view-token', authenticate, async (req: AuthRequest, res) => {
 });
 
 // GET /api/documents/stream/:id - Secure, authorized document streaming
+// Strictly requires valid Bearer token in Authorization header or X-Document-View-Token header
+// Avoids leaking sensitive tokens in URL query strings (logs, browser history, telemetry)
 router.get('/stream/:id', async (req: any, res) => {
   try {
-    // Support either standard Authorization header OR short-lived single-use view token
     let authenticatedUser: any = null;
 
     const authHeader = req.headers.authorization;
-    const queryToken = req.query.token || req.query.viewToken;
+    const viewTokenHeader = req.headers['x-document-view-token'];
+    const rawToken = (authHeader && authHeader.startsWith('Bearer ')) 
+      ? authHeader.substring(7) 
+      : (typeof viewTokenHeader === 'string' ? viewTokenHeader : null);
 
-    if (authHeader && authHeader.startsWith('Bearer ')) {
+    if (rawToken) {
       try {
-        authenticatedUser = jwt.verify(authHeader.substring(7), JWT_SECRET);
-      } catch (_) {}
-    } else if (queryToken && typeof queryToken === 'string') {
-      try {
-        const payload = jwt.verify(queryToken, JWT_SECRET) as any;
+        const payload = jwt.verify(rawToken, JWT_SECRET) as any;
         // If single-use document view token, ensure it matches this specific document
         if (payload.purpose === 'DOCUMENT_STREAM_VIEW') {
           if (Number(payload.docId) !== Number(req.params.id)) {
@@ -88,7 +88,7 @@ router.get('/stream/:id', async (req: any, res) => {
     }
 
     if (!authenticatedUser) {
-      return res.status(401).json({ error: 'Unauthorized: Valid authentication token or view token required to access financial records.' });
+      return res.status(401).json({ error: 'Unauthorized: Valid Bearer token or X-Document-View-Token header required to stream financial documents.' });
     }
 
     const doc = await db.queryOne(`

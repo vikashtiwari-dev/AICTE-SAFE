@@ -240,9 +240,20 @@ router.post('/', authenticate, requireRole(['admin', 'bureau_officer', 'institut
     return res.status(400).json({ error: 'Deposit amount must be a positive numeric value greater than zero.' });
   }
 
-  // Chronological validation: maturity date must strictly succeed issue date
-  if (issue_date >= maturity_date) {
+  // Chronological & valid calendar date format validation
+  const issueD = new Date(issue_date);
+  const maturityD = new Date(maturity_date);
+  if (isNaN(issueD.getTime()) || isNaN(maturityD.getTime())) {
+    return res.status(400).json({ error: 'Issue date and maturity date must be valid calendar dates (YYYY-MM-DD).' });
+  }
+  if (issueD >= maturityD) {
     return res.status(400).json({ error: 'Maturity date must be chronologically after the issue date.' });
+  }
+
+  // Allowed deposit_type and purpose enum checks
+  const allowedDepositTypes = ['FDR', 'BG', 'Government_Bond', 'e-BG'];
+  if (deposit_type && !allowedDepositTypes.includes(deposit_type)) {
+    return res.status(400).json({ error: `Invalid deposit_type. Must be one of: ${allowedDepositTypes.join(', ')}` });
   }
 
   // Interest rate bounds: 0% to 25% per annum
@@ -371,8 +382,15 @@ router.put('/:id', authenticate, requireRole(['admin', 'bureau_officer']), async
 
   const updatedIssueDate = issue_date !== undefined ? issue_date : fdr.issue_date;
   const updatedMaturityDate = maturity_date !== undefined ? maturity_date : fdr.maturity_date;
-  if (updatedIssueDate && updatedMaturityDate && updatedIssueDate > updatedMaturityDate) {
-    return res.status(400).json({ error: 'Maturity date cannot precede the issue date.' });
+  if (updatedIssueDate && updatedMaturityDate) {
+    const upIssueD = new Date(updatedIssueDate);
+    const upMaturityD = new Date(updatedMaturityDate);
+    if (isNaN(upIssueD.getTime()) || isNaN(upMaturityD.getTime())) {
+      return res.status(400).json({ error: 'Issue date and maturity date must be valid calendar dates (YYYY-MM-DD).' });
+    }
+    if (upIssueD >= upMaturityD) {
+      return res.status(400).json({ error: 'Maturity date cannot precede or match the issue date.' });
+    }
   }
 
   const updatedInterestRate = interest_rate !== undefined ? (interest_rate ? parseFloat(interest_rate) : null) : fdr.interest_rate;

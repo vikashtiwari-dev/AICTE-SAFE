@@ -840,16 +840,23 @@ export async function dispatchStatutoryNudges(): Promise<number> {
 }
 
 /**
- * Retries failed statutory notifications with exponential backoff / retry tracking.
- * - Queries notifications marked as FAILED with retry_count < 3.
- * - Re-attempts dispatch via active providers.
- * - Updates status to DELIVERED or FAILED_PERMANENT after maximum retry budget.
- * - Records definitive final outcome.
+ * Retries failed statutory notifications with true mathematical exponential backoff.
+ * Backoff schedule:
+ * - Attempt 1 (initial failure): eligible after 2^1 * 15 min = 30 minutes
+ * - Attempt 2: eligible after 2^2 * 15 min = 60 minutes
+ * - Attempt 3: eligible after 2^3 * 15 min = 120 minutes
+ * - After 3 failed attempts: marked permanently failed (FAILED_PERMANENT) and raises Admin Alert
  */
 export async function retryFailedNotifications(maxToRetry = 25): Promise<{ total_retried: number; succeeded: number; failed: number }> {
+  // Query failed logs whose last attempt is older than exponential backoff horizon
   const failedLogs = await db.prepare(`
     SELECT * FROM notifications_log 
-    WHERE (status = 'FAILED' OR status = 'FAILED_RETRYING') AND (retry_count IS NULL OR retry_count < 3)
+    WHERE (status = 'FAILED' OR status = 'FAILED_RETRYING') 
+      AND (retry_count IS NULL OR retry_count < 3)
+      AND (
+        last_retry_at IS NULL 
+        OR last_retry_at <= CURRENT_TIMESTAMP - (POWER(2, COALESCE(retry_count, 0)) * INTERVAL '15 minutes')
+      )
     ORDER BY sent_at ASC
     LIMIT ?
   `).all(maxToRetry) as any[];
@@ -883,6 +890,20 @@ export async function retryFailedNotifications(maxToRetry = 25): Promise<{ total
         SET status = ?, delivery_status = ?, retry_count = ?, last_retry_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `, [nextStatus, outcome.delivery_status, nextRetries, log.id]);
+
+      // If permanently failed after 3 attempts, raise an alert for central administrator
+      if (nextStatus === 'FAILED_PERMANENT') {
+        try {
+          await db.execute(`
+            INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
+            VALUES (?, ?, 'Notification_Delivery_Exhausted', 'High', ?)
+          `, [
+            log.fdr_id || null,
+            log.institution_id || null,
+            `Persistent Notification Failure: Automated ${channel} notification to ${recipient} failed after 3 attempts with exponential backoff. Reason: ${outcome.delivery_status}`
+          ]);
+        } catch (_) {}
+      }
     }
   }
 

@@ -7,19 +7,21 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import { db } from '../db/database';
 
-// In production, require strong configured secret and fail-closed to prevent multi-instance authentication breaks
+// In production, require high-entropy, strong configured secret (min 32 chars) and fail-closed
 export function resolveJWTSecret(): string {
   const configuredSecret = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
-  if (configuredSecret && configuredSecret.trim().length >= 16) {
+  if (configuredSecret && configuredSecret.trim().length >= 32) {
     return configuredSecret.trim();
   }
 
   if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
-    console.error('🚨 [FATAL SECURITY ERROR] Strong JWT_SECRET with >= 16 characters must be configured in production!');
-    throw new Error('FATAL SECURITY CONFIGURATION: JWT_SECRET must be configured with at least 16 characters in production environment.');
+    console.error('🚨 [FATAL SECURITY ERROR] High-entropy JWT_SECRET with >= 32 characters must be configured in production!');
+    throw new Error('FATAL SECURITY CONFIGURATION: JWT_SECRET must be configured with at least 32 characters of high-entropy randomness in production.');
   }
 
+  // Fallback for offline local developer unit tests only
   return 'aicte-local-offline-dev-key-32chars!';
 }
 
@@ -34,7 +36,7 @@ export interface AuthRequest extends Request {
   };
 }
 
-export function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
+export async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: Valid Bearer token required in Authorization header' });
@@ -44,6 +46,26 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
 
   try {
     const payload = jwt.verify(token, JWT_SECRET) as any;
+
+    // Issue 16: Immediate revocation/deactivation enforcement against live database
+    // Ensures disabled accounts, revoked tokens, or changed roles take effect immediately
+    if (payload.userId) {
+      try {
+        const liveUser = await db.queryOne('SELECT id, is_active, role, institution_id FROM users WHERE id = ?', [payload.userId]);
+        if (!liveUser) {
+          return res.status(401).json({ error: 'Account does not exist or has been removed.' });
+        }
+        if (liveUser.is_active === false || liveUser.is_active === 0) {
+          return res.status(403).json({ error: 'Account deactivated: Access revoked by Council Administrator.' });
+        }
+        // Sync payload role and institution_id with live authoritative database
+        payload.role = liveUser.role;
+        payload.institution_id = liveUser.institution_id;
+      } catch (dbCheckErr) {
+        // If DB temporary error, proceed with verified cryptographically signed payload
+      }
+    }
+
     req.user = payload;
     next();
   } catch (err: any) {

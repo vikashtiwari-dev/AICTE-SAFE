@@ -162,13 +162,18 @@ router.patch('/:id/tier-review', verificationLimiter, authenticate, requireRole(
       return res.status(400).json({ error: `State transition error: Cannot move to Finance_Officer from current stage "${request.review_stage}".` });
     }
 
-    await db.transaction(async (tx) => {
-      await tx.execute(`
+    const updateRes = await db.transaction(async (tx) => {
+      // Optimistic concurrency & stage enforcement: Only update if current review_stage is exactly 'Dealing_Officer'
+      const executed = await tx.execute(`
         UPDATE release_requests 
         SET review_stage = 'Finance_Officer', status = 'Under Review',
             dealing_officer_id = ?, dealing_officer_remarks = ?, dealing_officer_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = ? AND review_stage = 'Dealing_Officer'
       `, [req.user!.userId, remarks || 'Dealing Assistant primary verification complete: Bank confirmation & lock-in requirements checked.', req.params.id]);
+
+      if (executed.changes === 0) {
+        throw new Error('CONCURRENT_MODIFICATION_OR_INVALID_STAGE');
+      }
 
       await recordAuditLog(tx, {
         entity_type: 'Release',
@@ -178,6 +183,7 @@ router.patch('/:id/tier-review', verificationLimiter, authenticate, requireRole(
         new_value: JSON.stringify({ next_stage: 'Finance_Officer', remarks }),
         notes: remarks || 'Forwarded to Finance Officer'
       });
+      return true;
     });
 
     return res.json({ success: true, message: 'Dealing scrutiny completed. Case forwarded to Finance Officer.' });
@@ -191,13 +197,18 @@ router.patch('/:id/tier-review', verificationLimiter, authenticate, requireRole(
       return res.status(403).json({ error: 'Separation of duties violation: Dealing officer who performed initial scrutiny cannot act as Finance Officer.' });
     }
 
-    await db.transaction(async (tx) => {
-      await tx.execute(`
+    const updateRes = await db.transaction(async (tx) => {
+      // Optimistic concurrency & stage enforcement: Only update if current review_stage is exactly 'Finance_Officer'
+      const executed = await tx.execute(`
         UPDATE release_requests 
         SET review_stage = 'Director_Approval', status = 'Under Review',
             finance_officer_id = ?, finance_officer_remarks = ?, finance_officer_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = ? AND review_stage = 'Finance_Officer'
       `, [req.user!.userId, remarks || 'Finance Officer concurrence recorded: Interest reconciliation & no-dues confirmed.', req.params.id]);
+
+      if (executed.changes === 0) {
+        throw new Error('CONCURRENT_MODIFICATION_OR_INVALID_STAGE');
+      }
 
       await recordAuditLog(tx, {
         entity_type: 'Release',
@@ -207,6 +218,7 @@ router.patch('/:id/tier-review', verificationLimiter, authenticate, requireRole(
         new_value: JSON.stringify({ next_stage: 'Director_Approval', remarks }),
         notes: remarks || 'Forwarded to Director'
       });
+      return true;
     });
 
     return res.json({ success: true, message: 'Finance concurrence recorded. Forwarded to Director for statutory order approval.' });
@@ -252,15 +264,19 @@ router.post('/:id/dsc-sign', verificationLimiter, authenticate, requireRole(['ad
   try {
     // Transition request to Approved with Statutory Order Attestation
     await db.transaction(async (tx) => {
-      await tx.execute(`
+      const executed = await tx.execute(`
         UPDATE release_requests 
         SET status = 'Approved', review_stage = 'Approved',
             approved_by = ?, approved_at = CURRENT_TIMESTAMP,
             director_id = ?, director_remarks = ?, director_at = CURRENT_TIMESTAMP,
             statutory_order_number = ?,
             remarks = 'Statutory Release Order approved under Section 10(k) AICTE Act'
-        WHERE id = ?
+        WHERE id = ? AND review_stage = 'Director_Approval' AND status = 'Under Review'
       `, [req.user!.userId, req.user!.userId, `Formally sanctioned by ${signerName} (${officerDesignation})`, orderNumber, req.params.id]);
+
+      if (executed.changes === 0) {
+        throw new Error('CONCURRENT_MODIFICATION_OR_INVALID_STAGE');
+      }
 
       await recordAuditLog(tx, {
         entity_type: 'Release',

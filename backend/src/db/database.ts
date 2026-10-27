@@ -1,6 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import tls from 'tls';
 import { Pool, PoolClient } from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -91,6 +92,9 @@ export function getTrustedCABundleArray(): string[] {
     if (customCa.includes('BEGIN CERTIFICATE')) {
       parts.push(customCa);
     }
+  }
+  if (tls.rootCertificates && Array.isArray(tls.rootCertificates)) {
+    parts.push(...tls.rootCertificates);
   }
   return parts;
 }

@@ -154,8 +154,8 @@ if (fs.existsSync(frontendDist)) {
   });
 }
 
-// Start server if not imported as serverless handler
-if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+// Start server if not running in serverless environment
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   ensureDbInitialized().then(() => {
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 AICTE SAFE Engine running on http://0.0.0.0:${PORT}`);

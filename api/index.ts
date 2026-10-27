@@ -20,7 +20,12 @@ let app: any = null;
 let loadError: any = null;
 
 try {
-  const backendModule = require('../backend/src/index');
+  let backendModule: any = null;
+  try {
+    backendModule = require('../backend/dist/index');
+  } catch (_) {
+    backendModule = require('../backend/src/index');
+  }
   app = backendModule.default || backendModule;
 } catch (err: any) {
   console.error('Fatal Backend Load Error:', err);

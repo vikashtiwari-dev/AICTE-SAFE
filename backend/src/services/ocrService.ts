@@ -20,11 +20,47 @@ export interface ExtractedFDRData {
   engine_measured_confidence?: number | null;
   extraction_status: 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' | 'OCR_UNCERTAIN_HUMAN_REVIEW_REQUIRED' | 'INSUFFICIENT_DATA_UNREADABLE';
   verification_tier: 'OCR_EXTRACTED_NOT_BANK_VERIFIED';
+  requires_manual_scrutiny: boolean;
   extracted_fields: Record<string, { value: any; confidence: number; source: string }>;
   missing_fields: string[];
   discrepancies: string[];
   message: string;
-  ocr_engine_used: 'Tesseract_v5_Neural_OCR' | 'PDF_Binary_Token_Stream' | 'Hybrid_Fallback';
+  ocr_engine_used: 'Tesseract_v5_Neural_OCR' | 'PDF_Binary_Token_Stream' | 'Scanned_PDF_Rasterized_Tesseract_OCR' | 'Hybrid_Fallback';
+}
+
+/**
+ * Rasterizes pages of a scanned PDF document into PNG image buffers for Tesseract neural OCR
+ */
+async function rasterizePdfPages(pdfBuffer: Buffer, maxPages = 3): Promise<Buffer[]> {
+  const images: Buffer[] = [];
+  try {
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const { createCanvas } = require('@napi-rs/canvas');
+
+    const loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(pdfBuffer),
+      useSystemFonts: true,
+      disableFontFace: true,
+    });
+    const pdfDoc = await loadingTask.promise;
+    const numPages = Math.min(pdfDoc.numPages, maxPages);
+
+    for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2.0 }); // 2x scale for crisp OCR recognition
+      const canvas = createCanvas(viewport.width, viewport.height);
+      const ctx = canvas.getContext('2d');
+      await (page.render({
+        canvasContext: ctx as any,
+        viewport,
+        canvas: canvas as any
+      } as any)).promise;
+      images.push(canvas.toBuffer('image/png'));
+    }
+  } catch (err: any) {
+    console.warn('PDF rasterization notice (skipping raster OCR):', err.message);
+  }
+  return images;
 }
 
 /**
@@ -76,7 +112,7 @@ export async function extractFDRFromDocument(
   submittedData?: { deposit_amount?: number; fdr_number?: string }
 ): Promise<ExtractedFDRData> {
   let fileText = '';
-  let engineUsed: 'Tesseract_v5_Neural_OCR' | 'PDF_Binary_Token_Stream' | 'Hybrid_Fallback' = 'Hybrid_Fallback';
+  let engineUsed: 'Tesseract_v5_Neural_OCR' | 'PDF_Binary_Token_Stream' | 'Scanned_PDF_Rasterized_Tesseract_OCR' | 'Hybrid_Fallback' = 'Hybrid_Fallback';
 
   if (!fs.existsSync(filePath)) {
     return {
@@ -95,6 +131,7 @@ export async function extractFDRFromDocument(
       confidence_score: 0,
       extraction_status: 'INSUFFICIENT_DATA_UNREADABLE',
       verification_tier: 'OCR_EXTRACTED_NOT_BANK_VERIFIED',
+      requires_manual_scrutiny: true,
       extracted_fields: {},
       missing_fields: ['Document File'],
       discrepancies: ['File not found on server'],
@@ -129,12 +166,36 @@ export async function extractFDRFromDocument(
       const pdfData = await parser.getText();
       fileText = pdfData?.text || '';
       try { await parser.destroy(); } catch (_) {}
-      engineUsed = 'PDF_Binary_Token_Stream';
-      if (fileText.trim().length >= 20) {
-        engineMeasuredConfidence = 100; // Exact digital vector font extraction
+
+      if (fileText.trim().length >= 30) {
+        engineUsed = 'PDF_Binary_Token_Stream';
+        engineMeasuredConfidence = 92; // Vector text stream parsed cleanly
+      } else {
+        // Scanned PDF fallback: Document contains scanned bitmaps rather than text streams.
+        // Rasterize PDF pages into PNG images and execute Tesseract neural OCR.
+        const pageImages = await rasterizePdfPages(fileBuffer);
+        if (pageImages.length > 0) {
+          const worker = await createWorker('eng');
+          const pageTexts: string[] = [];
+          let totalConfidence = 0;
+          for (const imgBuffer of pageImages) {
+            const ret = await worker.recognize(imgBuffer);
+            if (ret.data && ret.data.text && ret.data.text.trim().length > 0) {
+              pageTexts.push(ret.data.text);
+              totalConfidence += Number(ret.data.confidence || 0);
+            }
+          }
+          await worker.terminate();
+
+          if (pageTexts.length > 0) {
+            fileText = pageTexts.join('\n');
+            engineUsed = 'Scanned_PDF_Rasterized_Tesseract_OCR';
+            engineMeasuredConfidence = Math.round(totalConfidence / pageTexts.length);
+          }
+        }
       }
-    } catch (pdfErr) {
-      console.warn('PDF stream parse warning:', pdfErr);
+    } catch (pdfErr: any) {
+      console.warn('PDF stream parse / rasterization warning:', pdfErr.message);
     }
   }
 
@@ -393,6 +454,7 @@ export async function extractFDRFromDocument(
     engine_measured_confidence: engineMeasuredConfidence,
     extraction_status: extractionStatus,
     verification_tier: 'OCR_EXTRACTED_NOT_BANK_VERIFIED',
+    requires_manual_scrutiny: extractionStatus !== 'OCR_HIGH_CONFIDENCE_PENDING_SCRUTINY' || discrepancies.length > 0 || missingFields.length > 0,
     extracted_fields: extractedFields,
     missing_fields: missingFields,
     discrepancies,

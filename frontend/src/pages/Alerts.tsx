@@ -404,10 +404,22 @@ export const Alerts: React.FC = () => {
                             </p>
                           </td>
                           <td className="py-3.5 px-4 text-right">
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              {log.delivery_status}
-                            </span>
+                            {log.status === 'DELIVERED' || log.delivery_status?.toLowerCase().includes('delivered via') ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200" title={log.provider_reference}>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                {log.delivery_status}
+                              </span>
+                            ) : log.status === 'FAILED_MISSING_CONTACT' || log.delivery_status?.toLowerCase().includes('missing') ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                                <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                                {log.delivery_status}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200" title="Simulated testnet dispatch (live provider unconfigured)">
+                                <Clock className="w-3.5 h-3.5 text-amber-600" />
+                                {log.delivery_status}
+                              </span>
+                            )}
                             <span className="text-[10px] text-slate-400 block mt-1">
                               {new Date(log.sent_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                             </span>

@@ -227,7 +227,10 @@ export interface NotificationLog {
   recipient_contact: string;
   message: string;
   trigger_days: number;
-  delivery_status: 'Delivered' | 'Pending' | 'Failed';
+  days_before_maturity?: number;
+  delivery_status: string;
+  status?: string;
+  provider_reference?: string;
   sent_at: string;
   fdr_number?: string;
   institution_name?: string;

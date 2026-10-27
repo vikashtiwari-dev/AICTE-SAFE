@@ -106,6 +106,12 @@ const rawDbUrl =
 
 if (rawDbUrl) {
   try {
+    // Strip sslmode from connection URL so pg-connection-string does not blow away our custom CA configuration
+    const sanitizedDbUrl = rawDbUrl
+      .replace(/([?&])sslmode=[^&]*(&|$)/g, '$1')
+      .replace(/\?&/, '?')
+      .replace(/[?&]$/, '');
+
     // Enforce strict TLS certificate verification with trusted CA chain
     const sslConfig = {
       ca: getTrustedCABundle(),
@@ -113,7 +119,7 @@ if (rawDbUrl) {
     };
 
     pgPool = new Pool({
-      connectionString: rawDbUrl,
+      connectionString: sanitizedDbUrl,
       ssl: sslConfig,
       max: 10,
       idleTimeoutMillis: 30000,
@@ -343,6 +349,19 @@ export async function executeMutation(sql: string, params: any[] = []): Promise<
 export async function initializeDatabase() {
   if (db.isPostgres && pgPool) {
     try {
+      // Ensure required schema migrations exist even on provisioned databases
+      await pgPool.query(`
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS recipient_role VARCHAR(100);
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS recipient_contact VARCHAR(255);
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS message_body TEXT;
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS days_before_maturity INTEGER;
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS delivery_status TEXT;
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS provider_reference VARCHAR(255);
+        ALTER TABLE notifications_log ALTER COLUMN delivery_status TYPE TEXT;
+        ALTER TABLE notifications_log ALTER COLUMN status TYPE VARCHAR(100);
+        ALTER TABLE notifications_log ALTER COLUMN recipient_role TYPE VARCHAR(100);
+      `).catch(() => {});
+
       // Fast-path check: if schema is already provisioned, return immediately to optimize serverless cold starts
       const checkRes = await pgPool.query("SELECT to_regclass('public.users') as exists");
       if (checkRes.rows[0]?.exists) {
@@ -601,9 +620,25 @@ export async function initializeDatabase() {
           recipient VARCHAR(255) NOT NULL,
           subject VARCHAR(255),
           message TEXT NOT NULL,
+          recipient_role VARCHAR(100),
+          recipient_contact VARCHAR(255),
+          message_body TEXT,
+          days_before_maturity INTEGER,
+          delivery_status VARCHAR(255) DEFAULT 'Delivered',
+          provider_reference VARCHAR(255),
           status VARCHAR(50) DEFAULT 'SENT',
           sent_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
+      `);
+
+      // Ensure all extended notification columns exist on legacy tables
+      await pgPool.query(`
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS recipient_role VARCHAR(100);
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS recipient_contact VARCHAR(255);
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS message_body TEXT;
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS days_before_maturity INTEGER;
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(255);
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS provider_reference VARCHAR(255);
       `);
 
       // Ensure cryptographic tamper-evident hash chaining columns exist

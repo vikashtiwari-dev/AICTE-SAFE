@@ -281,10 +281,11 @@ router.post('/:id/dsc-sign', authenticate, requireRole(['admin']), async (req: A
       message: 'Statutory release order approved and cryptographically sealed for regulatory record.',
       order_number: orderNumber,
       approval_seal: dscHash,
+      seal_type: 'PROTOTYPE_INTEGRITY_SEAL (Non-CCA PKI)',
       approving_officer: signerName,
       designation: officerDesignation,
       timestamp,
-      legal_disclosure: 'Statutory Electronic Approval Attestation (Section 10 AICTE Act Audit Trail) - Prototype Seal'
+      legal_disclosure: 'Statutory Electronic Approval Attestation (Section 10(k) AICTE Act Audit Trail) - Prototype Seal. Note: This cryptographic digest provides immutable record integrity within the portal ledger; it does not replace an IT Act 2000 licensed Certifying Authority (CCA) Class-3 DSC token.'
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Approval order failed to record in cloud database' });
@@ -304,12 +305,36 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
   }
 
   const { noc_document_path, discharge_remarks } = req.body;
+  const docRef = noc_document_path || request.noc_document_path;
 
   // Require documented provenance before discharging regulatory encumbrance
-  if (!noc_document_path && !request.noc_document_path) {
+  if (!docRef) {
     return res.status(400).json({
       error: 'Evidence required: Discharge cannot be completed without providing the verified Bank No-Objection Certificate (NOC) / discharge document reference.'
     });
+  }
+
+  // Verify NOC provenance against fdr_documents
+  let provenanceVerified = false;
+  let linkedDocId: number | null = null;
+  const fdrDocs = await db.prepare(`
+    SELECT id, file_name, file_path, document_type 
+    FROM fdr_documents 
+    WHERE fdr_id = ? AND is_active = 1
+  `).all(request.fdr_id) as any[];
+
+  if (fdrDocs && fdrDocs.length > 0) {
+    const matched = fdrDocs.find((d: any) => 
+      String(d.id) === String(docRef) ||
+      d.file_path === docRef ||
+      d.file_name === docRef ||
+      d.document_type.toLowerCase().includes('noc') ||
+      d.document_type.toLowerCase().includes('release')
+    );
+    if (matched) {
+      provenanceVerified = true;
+      linkedDocId = matched.id;
+    }
   }
 
   try {
@@ -321,7 +346,7 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
             noc_document_path = COALESCE(?, noc_document_path),
             remarks = COALESCE(?, remarks)
         WHERE id = ?
-      `, [noc_document_path || null, discharge_remarks || 'Bank lien formally discharged pursuant to AICTE Approval Order', req.params.id]);
+      `, [docRef, discharge_remarks || 'Bank lien formally discharged pursuant to AICTE Approval Order', req.params.id]);
 
       // 2. Mark FDR as Released
       await tx.execute(`
@@ -339,9 +364,12 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
         new_value: JSON.stringify({
           release_request_id: request.id,
           order_number: request.statutory_order_number,
-          discharged_by: req.user!.userId
+          discharged_by: req.user!.userId,
+          provenance_verified: provenanceVerified,
+          noc_reference: docRef,
+          noc_document_id: linkedDocId
         }),
-        notes: 'Marked released in portal registry — Bank Lien Relinquished'
+        notes: 'Marked released in portal registry — Bank Lien Relinquished. Physical instrument discharge must be confirmed directly with issuing bank branch.'
       });
     });
 
@@ -349,7 +377,9 @@ router.patch('/:id/complete', authenticate, requireRole(['admin', 'bureau_office
       success: true,
       message: 'FDR instrument successfully discharged and marked Released in the national registry (Bank Lien Relinquished in Portal Registry).',
       fdr_id: request.fdr_id,
-      order_number: request.statutory_order_number
+      order_number: request.statutory_order_number,
+      provenance_verified: provenanceVerified,
+      regulatory_notice: 'Lien discharge recorded in AICTE portal registry. Physical instrument encashment and physical lien cancellation must be completed directly with the issuing bank branch.'
     });
   } catch (err: any) {
     return res.status(500).json({ error: 'Discharge transaction failed' });

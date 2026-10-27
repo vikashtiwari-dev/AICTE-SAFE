@@ -102,8 +102,10 @@ export async function lookupIFSC(code: string) {
       return {
         valid: true,
         live_bank_confirmed: true,
+        instrument_authenticity_confirmed: false,
         requires_manual_verification: false,
         verification_status_label: 'Third-Party Directory Confirmed (Razorpay Public Mirror of RBI Master Directory)',
+        directory_disclaimer: 'Directory lookup confirms IFSC branch identity and routing code. It does NOT independently verify deposit balance, FDR genuineness, or regulatory lien endorsement with the issuing bank branch.',
         ifsc: clean,
         bank_name: data.BANK || scheduledBank.bank,
         bank_branch: data.BRANCH || 'Branch Verified',

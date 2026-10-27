@@ -170,7 +170,10 @@ if (rawDbUrl) {
  */
 export function convertSql(sql: string): { pgSql: string; isInsert: boolean } {
   let idx = 1;
-  let converted = sql.replace(/datetime\('now'\)/gi, 'CURRENT_TIMESTAMP');
+  let converted = sql.replace(/datetime\('now',\s*['"]-?(\d+)\s*days?['"]\)/gi, "CURRENT_TIMESTAMP - INTERVAL '$1 days'");
+  converted = converted.replace(/date\('now',\s*['"]-?(\d+)\s*days?['"]\)/gi, "CURRENT_DATE - INTERVAL '$1 days'");
+  converted = converted.replace(/datetime\('now'\)/gi, 'CURRENT_TIMESTAMP');
+  converted = converted.replace(/date\('now'\)/gi, 'CURRENT_DATE');
   converted = converted.replace(/\?/g, () => '$' + (idx++));
   const trimmed = converted.trim();
   const upper = trimmed.toUpperCase();
@@ -415,6 +418,24 @@ export async function initializeDatabase() {
           document_id INTEGER,
           consumed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
+
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0;
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS last_retry_at TIMESTAMP WITH TIME ZONE;
+
+        CREATE TABLE IF NOT EXISTS fdr_verification_attempts (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER REFERENCES fdrs(id) ON DELETE CASCADE,
+          verification_source VARCHAR(64) NOT NULL,
+          source_reference VARCHAR(128),
+          verification_tier VARCHAR(64) NOT NULL,
+          result_status VARCHAR(64) NOT NULL,
+          is_simulated BOOLEAN DEFAULT FALSE,
+          details_payload TEXT,
+          discrepancies TEXT,
+          verified_by INTEGER REFERENCES users(id),
+          attempted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_fdr_verif_fdr_id ON fdr_verification_attempts(fdr_id);
       `).catch(() => {});
 
       // Fast-path check: if schema is already provisioned, return immediately to optimize serverless cold starts
@@ -694,6 +715,23 @@ export async function initializeDatabase() {
         ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS days_before_maturity INTEGER;
         ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(255);
         ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS provider_reference VARCHAR(255);
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0;
+        ALTER TABLE notifications_log ADD COLUMN IF NOT EXISTS last_retry_at TIMESTAMP WITH TIME ZONE;
+
+        CREATE TABLE IF NOT EXISTS fdr_verification_attempts (
+          id SERIAL PRIMARY KEY,
+          fdr_id INTEGER REFERENCES fdrs(id) ON DELETE CASCADE,
+          verification_source VARCHAR(64) NOT NULL,
+          source_reference VARCHAR(128),
+          verification_tier VARCHAR(64) NOT NULL,
+          result_status VARCHAR(64) NOT NULL,
+          is_simulated BOOLEAN DEFAULT FALSE,
+          details_payload TEXT,
+          discrepancies TEXT,
+          verified_by INTEGER REFERENCES users(id),
+          attempted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_fdr_verif_fdr_id ON fdr_verification_attempts(fdr_id);
       `);
 
       // Ensure cryptographic tamper-evident hash chaining columns exist

@@ -2,6 +2,7 @@ import express from 'express';
 import { db, verifyAuditChain } from '../db/database';
 import { authenticate, AuthRequest, maskAccountNumber } from '../middleware/auth';
 import { sanitizeError } from '../middleware/security';
+import { getImpactBenchmarkMetrics } from '../services/impactService';
 
 const router = express.Router();
 
@@ -393,6 +394,16 @@ router.get('/verify-audit-chain', authenticate, async (req: AuthRequest, res) =>
     });
   } catch (err: any) {
     return res.status(500).json(sanitizeError(err, 'Failed to verify audit ledger chain'));
+  }
+});
+
+// GET /api/reports/impact-metrics - Authoritative PS 26265 Measurable Improvement & Baseline Benchmarks
+router.get('/impact-metrics', authenticate, async (_req: AuthRequest, res) => {
+  try {
+    const report = await getImpactBenchmarkMetrics();
+    return res.json(report);
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Failed to generate impact metrics report'));
   }
 });
 

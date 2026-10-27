@@ -5,7 +5,7 @@ import path from 'path';
 import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest, maskAccountNumber } from '../middleware/auth';
 import { upload, validateFileMagic, validateDocumentFile } from '../middleware/upload';
-import { lookupIFSC, verifyNeSLeBG, validateSFMS_IFN760 } from '../services/bankingService';
+import { lookupIFSC, verifyNeSLeBG, validateSFMS_IFN760, verifyIndividualFDRDetails } from '../services/bankingService';
 import { extractFDRFromDocument } from '../services/ocrService';
 import { calculateRequiredDeposit, validateLockInEligibility } from '../services/aphService';
 import { verificationLimiter, documentLimiter, sanitizeError } from '../middleware/security';
@@ -479,11 +479,136 @@ router.patch('/:id/verify', verificationLimiter, authenticate, requireRole(['adm
           VALUES (?, ?, 'Discrepancy', 'Critical', ?)
         `, [fdr.id, fdr.institution_id, `Scrutiny Discrepancy flagged on FDR ${fdr.fdr_number}: ${verification_notes}`]);
       }
+
+      // Record immutable verification attempt log
+      await tx.execute(`
+        INSERT INTO fdr_verification_attempts (
+          fdr_id, verification_source, source_reference, verification_tier,
+          result_status, is_simulated, details_payload, discrepancies, verified_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        fdr.id,
+        verification_method || 'OFFICER_MANUAL_SCRUTINY',
+        `OFFICER-USER-${req.user!.userId}`,
+        verification_status === 'Verified' ? 'BANK_CONFIRMED' : 'DISCREPANCY_FLAGGED',
+        verification_status,
+        false,
+        JSON.stringify({ notes: verification_notes, method: verification_method }),
+        verification_status === 'Discrepancy' ? verification_notes : null,
+        req.user!.userId
+      ]);
     });
 
     return res.json({ success: true, verification_status, fdr_status: newFdrStatus, verification_method });
   } catch (err: any) {
     return res.status(500).json(sanitizeError(err, 'Verification update failed'));
+  }
+});
+
+// POST /api/fdrs/:id/bank-verify - Trigger individual instrument bank verification check (Rate limited)
+router.post('/:id/bank-verify', verificationLimiter, authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), async (req: AuthRequest, res) => {
+  const fdr = await db.queryOne('SELECT * FROM fdrs WHERE id = ?', [req.params.id]) as any;
+  if (!fdr) return res.status(404).json({ error: 'FDR not found' });
+
+  // Ownership verification for institution user
+  if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
+    return res.status(403).json({ error: 'Forbidden: You do not possess clearance for this institutional record.' });
+  }
+
+  try {
+    const verificationResult = await verifyIndividualFDRDetails({
+      fdr_number: fdr.fdr_number,
+      bank_name: fdr.bank_name,
+      ifsc_code: fdr.ifsc_code,
+      deposit_amount: fdr.deposit_amount,
+      issue_date: fdr.issue_date,
+      maturity_date: fdr.maturity_date,
+      account_number: fdr.account_number,
+      joint_lien_undertaking: true
+    });
+
+    // Record attempt transactionally in fdr_verification_attempts
+    await db.transaction(async (tx) => {
+      await tx.execute(`
+        INSERT INTO fdr_verification_attempts (
+          fdr_id, verification_source, source_reference, verification_tier,
+          result_status, is_simulated, details_payload, discrepancies, verified_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        fdr.id,
+        verificationResult.verification_source,
+        verificationResult.reference_id,
+        verificationResult.verification_tier,
+        verificationResult.status,
+        verificationResult.is_simulated,
+        JSON.stringify(verificationResult),
+        verificationResult.discrepancies.length > 0 ? JSON.stringify(verificationResult.discrepancies) : null,
+        req.user!.userId
+      ]);
+
+      // If conflicting or discrepancy found, flag the instrument automatically
+      if (verificationResult.status === 'DISCREPANCY') {
+        await tx.execute(`
+          UPDATE fdrs SET verification_status = 'Discrepancy',
+            verification_notes = ?, last_updated_by = ?, last_updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `, [`Automated verification discrepancy: ${verificationResult.discrepancies.join('; ')}`, req.user!.userId, fdr.id]);
+
+        await tx.execute(`
+          INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
+          VALUES (?, ?, 'Discrepancy', 'Critical', ?)
+        `, [fdr.id, fdr.institution_id, `Automated Bank Verification Discrepancy on FDR ${fdr.fdr_number}: ${verificationResult.discrepancies.join('; ')}`]);
+
+        await recordAuditLog(tx, {
+          entity_type: 'FDR',
+          entity_id: fdr.id,
+          action: 'Bank Verification Discrepancy Flagged',
+          changed_by: req.user!.userId,
+          old_value: JSON.stringify({ verification_status: fdr.verification_status }),
+          new_value: JSON.stringify({ verification_status: 'Discrepancy', discrepancies: verificationResult.discrepancies }),
+          notes: `Automated Bank Gateway flagged discrepancy on FDR ${fdr.fdr_number}`
+        });
+      }
+    });
+
+    return res.json({
+      success: true,
+      fdr_id: fdr.id,
+      fdr_number: fdr.fdr_number,
+      ...verificationResult
+    });
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Bank verification check failed'));
+  }
+});
+
+// GET /api/fdrs/:id/verification-history - Full traceable audit log of all verification attempts
+router.get('/:id/verification-history', authenticate, async (req: AuthRequest, res) => {
+  const fdr = await db.queryOne('SELECT id, institution_id, fdr_number, verification_status FROM fdrs WHERE id = ?', [req.params.id]) as any;
+  if (!fdr) return res.status(404).json({ error: 'FDR not found' });
+
+  if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
+    return res.status(403).json({ error: 'Forbidden: Access denied to other institutional records.' });
+  }
+
+  try {
+    const attempts = await db.prepare(`
+      SELECT va.*, u.full_name as verifier_name, u.role as verifier_role
+      FROM fdr_verification_attempts va
+      LEFT JOIN users u ON va.verified_by = u.id
+      WHERE va.fdr_id = ?
+      ORDER BY va.attempted_at DESC
+    `).all(fdr.id);
+
+    return res.json({
+      fdr_id: fdr.id,
+      fdr_number: fdr.fdr_number,
+      current_verification_status: fdr.verification_status,
+      total_attempts: attempts.length,
+      history: attempts
+    });
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Failed to fetch verification history'));
   }
 });
 

@@ -1,8 +1,8 @@
 import express from 'express';
 import { db } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { dispatchStatutoryNudges } from '../services/alertService';
-import { sanitizeError } from '../middleware/security';
+import { dispatchStatutoryNudges, retryFailedNotifications } from '../services/alertService';
+import { sanitizeError, verificationLimiter } from '../middleware/security';
 
 const router = express.Router();
 
@@ -52,6 +52,21 @@ router.post('/trigger-nudges', authenticate, requireRole(['admin', 'bureau_offic
     });
   } catch (err: any) {
     return res.status(500).json(sanitizeError(err, 'Failed to dispatch statutory nudges'));
+  }
+});
+
+// POST /api/notifications/retry-failed - Retry failed statutory notifications (Rate limited)
+router.post('/retry-failed', verificationLimiter, authenticate, requireRole(['admin', 'bureau_officer']), async (req: AuthRequest, res) => {
+  try {
+    const limit = req.body.limit ? parseInt(req.body.limit, 10) : 25;
+    const retryResult = await retryFailedNotifications(limit);
+    return res.json({
+      success: true,
+      ...retryResult,
+      message: `Processed ${retryResult.total_retried} failed notifications. Successfully delivered: ${retryResult.succeeded}, Pending/Permanent: ${retryResult.failed}.`
+    });
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Failed to retry notifications'));
   }
 });
 

@@ -838,3 +838,110 @@ export async function dispatchStatutoryNudges(): Promise<number> {
 
   return nudgesSent;
 }
+
+/**
+ * Retries failed statutory notifications with exponential backoff / retry tracking.
+ * - Queries notifications marked as FAILED with retry_count < 3.
+ * - Re-attempts dispatch via active providers.
+ * - Updates status to DELIVERED or FAILED_PERMANENT after maximum retry budget.
+ * - Records definitive final outcome.
+ */
+export async function retryFailedNotifications(maxToRetry = 25): Promise<{ total_retried: number; succeeded: number; failed: number }> {
+  const failedLogs = await db.prepare(`
+    SELECT * FROM notifications_log 
+    WHERE (status = 'FAILED' OR status = 'FAILED_RETRYING') AND (retry_count IS NULL OR retry_count < 3)
+    ORDER BY sent_at ASC
+    LIMIT ?
+  `).all(maxToRetry) as any[];
+
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const log of failedLogs) {
+    const currentRetries = Number(log.retry_count || 0);
+    const channel = log.channel as 'WhatsApp' | 'Email' | 'SMS';
+    const recipient = log.recipient;
+    const subject = log.subject || 'AICTE Statutory Compliance Notice';
+    const body = log.message_body || log.message;
+
+    const outcome = await dispatchMessageToChannel(channel, recipient, subject, body);
+
+    if (outcome.delivered) {
+      succeeded++;
+      await db.execute(`
+        UPDATE notifications_log 
+        SET status = 'DELIVERED', delivery_status = ?, provider_reference = ?,
+            retry_count = ?, last_retry_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [outcome.delivery_status, outcome.provider_reference, currentRetries + 1, log.id]);
+    } else {
+      failed++;
+      const nextRetries = currentRetries + 1;
+      const nextStatus = nextRetries >= 3 ? 'FAILED_PERMANENT' : 'FAILED_RETRYING';
+      await db.execute(`
+        UPDATE notifications_log 
+        SET status = ?, delivery_status = ?, retry_count = ?, last_retry_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [nextStatus, outcome.delivery_status, nextRetries, log.id]);
+    }
+  }
+
+  return { total_retried: failedLogs.length, succeeded, failed };
+}
+
+/**
+ * Statutory Escalation Rules Engine:
+ * - Escalates overdue matured instruments (> 15 days past maturity) to Regional Officer Show-Cause status.
+ * - Escalates unresolved discrepancies open for > 14 days to Critical priority.
+ * - Proactively alerts Central Regulation Bureau on lingering compliance violations.
+ */
+export async function runStatutoryEscalation(): Promise<{ overdue_escalations: number; discrepancy_escalations: number }> {
+  let overdueEscalations = 0;
+  let discrepancyEscalations = 0;
+
+  // 1. Overdue Instruments: Matured > 15 days ago without renewal or release
+  const overdueFdrs = await db.prepare(`
+    SELECT f.id, f.institution_id, f.fdr_number, f.bank_name, f.maturity_date, i.name as institution_name
+    FROM fdrs f
+    JOIN institutions i ON f.institution_id = i.id
+    WHERE f.status IN ('Active', 'Expiring Soon', 'Matured', 'Pending Verification')
+      AND f.maturity_date < CURRENT_DATE - INTERVAL '15 days'
+  `).all() as any[];
+
+  for (const fdr of overdueFdrs) {
+    const existingAlert = await db.queryOne(`
+      SELECT id FROM alerts 
+      WHERE fdr_id = ? AND alert_type = 'Statutory_Lapse_Escalation' AND is_resolved = 0
+    `, [fdr.id]);
+
+    if (!existingAlert) {
+      await db.execute(`
+        INSERT INTO alerts (fdr_id, institution_id, alert_type, severity, message)
+        VALUES (?, ?, 'Statutory_Lapse_Escalation', 'Critical', ?)
+      `, [
+        fdr.id,
+        fdr.institution_id,
+        `Statutory Lock-in Violation: FDR ${fdr.fdr_number} (${fdr.bank_name}) for ${fdr.institution_name} has been matured since ${fdr.maturity_date} (> 15 days past lock-in) with no renewal or release filed. Escalated to Regional Officer for issuance of Show-Cause Notice under APH Section 8.`
+      ]);
+      overdueEscalations++;
+    }
+  }
+
+  // 2. Lingering Discrepancies: Discrepancy alerts open > 14 days without resolution
+  const lingeringAlerts = await db.prepare(`
+    SELECT id, message FROM alerts
+    WHERE alert_type = 'Discrepancy' AND is_resolved = 0 AND severity != 'Critical'
+      AND created_at < CURRENT_TIMESTAMP - INTERVAL '14 days'
+  `).all() as any[];
+
+  for (const alert of lingeringAlerts) {
+    await db.execute(`
+      UPDATE alerts SET severity = 'Critical',
+        message = message || ' [ESCALATED: Discrepancy unresolved for > 14 calendar days. Bureau Officer intervention required.]'
+      WHERE id = ?
+    `, [alert.id]);
+    discrepancyEscalations++;
+  }
+
+  return { overdue_escalations: overdueEscalations, discrepancy_escalations: discrepancyEscalations };
+}

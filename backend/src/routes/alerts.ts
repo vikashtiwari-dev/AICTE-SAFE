@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { db, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest, resolveJWTSecret } from '../middleware/auth';
 import { sanitizeError } from '../middleware/security';
-import { generateAlerts, dispatchStatutoryNudges, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
+import { generateAlerts, dispatchStatutoryNudges, runStatutoryEscalation, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
 
 const router = express.Router();
 
@@ -50,12 +50,14 @@ const handleCronCheck = async (req: express.Request, res: express.Response) => {
   try {
     const alertsCreated = await generateAlerts();
     const nudgesDispatched = await dispatchStatutoryNudges();
+    const escalations = await runStatutoryEscalation();
     return res.json({
       success: true,
       timestamp: new Date().toISOString(),
       job: 'DAILY_FDR_MATURITY_AND_COMPLIANCE_AUDIT',
       new_alerts_created: alertsCreated,
       nudges_dispatched: nudgesDispatched,
+      statutory_escalations: escalations,
       status: 'IDEMPOTENT_SCAN_COMPLETED',
       notes: 'Monitors 90/30/10-day maturity windows, discrepancy flags, overdue lock-in violations, and multi-channel statutory reminders.'
     });

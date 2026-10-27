@@ -1025,6 +1025,51 @@ No lien clause mentioned here.
     assert(false, 'Impact metrics test failed', err.message);
   }
 
+  // Test 30: Acceptance Test - Change each submitted field individually and verify mismatch prevents confirmation
+  console.log('\n▶ TEST 30: Acceptance Test - Strict Bank Verification Discrepancy Detection');
+  try {
+    const { verifyIndividualFDRDetails } = require('./dist/services/bankingService.js');
+
+    // Baseline clean instrument
+    const baseInput = {
+      fdr_number: 'FDR-SBI-TEST-9988',
+      bank_name: 'State Bank of India',
+      ifsc_code: 'SBIN0000001',
+      deposit_amount: 5000000,
+      issue_date: '2024-01-01',
+      maturity_date: '2034-01-01',
+      account_number: '12345678901',
+      joint_lien_undertaking: true
+    };
+
+    // 1. Invalid/missing lien should prevent confirmation
+    const lienMismatchRes = await verifyIndividualFDRDetails({ ...baseInput, joint_lien_undertaking: false });
+    assert(lienMismatchRes.verified === false, 'False joint lien prevents bank confirmation');
+    assert(lienMismatchRes.discrepancies.some(d => d.includes('Lien')), 'Lien absence correctly flagged in discrepancies');
+
+    // 2. Swapped / mismatched dates should be flagged
+    const dateMismatchRes = await verifyIndividualFDRDetails({ ...baseInput, issue_date: '2035-01-01', maturity_date: '2024-01-01' });
+    assert(dateMismatchRes.verified === false, 'Inverted dates prevent bank confirmation');
+    assert(dateMismatchRes.discrepancies.some(d => d.includes('Maturity date')), 'Date mismatch correctly flagged in discrepancies');
+
+    // 3. Unrecognized bank should be flagged
+    const bankMismatchRes = await verifyIndividualFDRDetails({ ...baseInput, bank_name: 'Fictional Private Bank Ltd' });
+    assert(bankMismatchRes.verified === false, 'Unrecognized bank prevents confirmation');
+    assert(bankMismatchRes.discrepancies.some(d => d.includes('not listed in the RBI Scheduled Commercial Banks Registry')), 'Bank mismatch caught');
+
+    // 4. Zero or negative amount should be flagged
+    const amountMismatchRes = await verifyIndividualFDRDetails({ ...baseInput, deposit_amount: -500 });
+    assert(amountMismatchRes.verified === false, 'Negative deposit amount prevents confirmation');
+    assert(amountMismatchRes.discrepancies.some(d => d.includes('positive numerical figure')), 'Negative amount caught');
+
+    // 5. Short or invalid FDR number should be flagged
+    const fdrMismatchRes = await verifyIndividualFDRDetails({ ...baseInput, fdr_number: '12' });
+    assert(fdrMismatchRes.verified === false, 'Malformed FDR number prevents confirmation');
+    assert(fdrMismatchRes.discrepancies.some(d => d.includes('minimum 5 characters')), 'Malformed FDR number caught');
+  } catch (err) {
+    assert(false, 'Acceptance test 30 failed', err.message);
+  }
+
   console.log('\n===================================================================');
   console.log(`📊 RESULTS: ${passedTests} / ${totalTests} AUDIT CHECKS PASSED (${Math.round((passedTests/totalTests)*100)}%)`);
   console.log('===================================================================\n');

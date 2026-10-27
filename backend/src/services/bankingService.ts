@@ -337,33 +337,69 @@ export async function verifyIndividualFDRDetails(
 
       if (res.ok) {
         const bankData = await res.json() as any;
+        if (!bankData || typeof bankData !== 'object') {
+          throw new Error('Authorized Bank Verification API returned an empty or unparseable payload');
+        }
+
+        const cleanSubmittedBank = (input.bank_name || '').trim().toLowerCase();
+        const cleanBankDataName = String(bankData.bank_name || '').trim().toLowerCase();
+        const bankNameMatch = Boolean(
+          cleanSubmittedBank && cleanBankDataName &&
+          (cleanSubmittedBank.includes(cleanBankDataName) || cleanBankDataName.includes(cleanSubmittedBank))
+        );
+
         const amountMatch = Math.abs(Number(bankData.amount || 0) - Number(input.deposit_amount)) < 0.01;
         const numberMatch = String(bankData.fdr_number || '').trim().toUpperCase() === input.fdr_number.trim().toUpperCase();
         const lienMatch = Boolean(bankData.joint_lien_marked);
 
-        if (!numberMatch) discrepancies.push(`FDR Number mismatch: Submitted "${input.fdr_number}" does not match bank record "${bankData.fdr_number}"`);
-        if (!amountMatch) discrepancies.push(`Deposit Amount mismatch: Submitted ₹${input.deposit_amount.toLocaleString('en-IN')} vs Bank Record ₹${Number(bankData.amount || 0).toLocaleString('en-IN')}`);
+        // Normalize calendar dates (YYYY-MM-DD)
+        const normalizeDate = (d: any) => {
+          if (!d) return '';
+          const parsed = new Date(d);
+          return isNaN(parsed.getTime()) ? String(d).trim() : parsed.toISOString().split('T')[0];
+        };
+
+        const subIssueDate = normalizeDate(input.issue_date);
+        const bankIssueDate = normalizeDate(bankData.issue_date);
+        const issueDateMatch = Boolean(subIssueDate && bankIssueDate && subIssueDate === bankIssueDate);
+
+        const subMaturityDate = normalizeDate(input.maturity_date);
+        const bankMaturityDate = normalizeDate(bankData.maturity_date);
+        const maturityDateMatch = Boolean(subMaturityDate && bankMaturityDate && subMaturityDate === bankMaturityDate);
+
+        if (!numberMatch) discrepancies.push(`FDR Number mismatch: Submitted "${input.fdr_number}" does not match bank record "${bankData.fdr_number || 'NOT_FOUND'}"`);
+        if (!amountMatch) discrepancies.push(`Deposit Amount mismatch: Submitted ₹${Number(input.deposit_amount).toLocaleString('en-IN')} vs Bank Record ₹${Number(bankData.amount || 0).toLocaleString('en-IN')}`);
+        if (!bankNameMatch) discrepancies.push(`Bank Name mismatch: Submitted "${input.bank_name}" does not match bank record "${bankData.bank_name || 'UNKNOWN'}"`);
+        if (!issueDateMatch) discrepancies.push(`Issue Date mismatch: Submitted "${input.issue_date}" does not match bank record "${bankData.issue_date || 'MISSING'}"`);
+        if (!maturityDateMatch) discrepancies.push(`Maturity Date mismatch: Submitted "${input.maturity_date}" does not match bank record "${bankData.maturity_date || 'MISSING'}"`);
         if (!lienMatch) discrepancies.push('AICTE Joint-Lien clause is NOT officially marked on the bank-side core ledger');
 
-        const hasDiscrepancy = discrepancies.length > 0;
+        // Joint-Lien clause check
+  if (!input.joint_lien_undertaking) {
+    discrepancies.push('AICTE Joint-Lien clause undertaking is missing or unconfirmed for this instrument.');
+  }
+
+  const hasDiscrepancy = discrepancies.length > 0;
+        const allMandatoryPassed = numberMatch && amountMatch && bankNameMatch && issueDateMatch && maturityDateMatch && lienMatch;
+
         return {
-          verified: !hasDiscrepancy,
-          verification_tier: hasDiscrepancy ? 'DISCREPANCY_FLAGGED' : 'BANK_CONFIRMED',
+          verified: allMandatoryPassed && !hasDiscrepancy,
+          verification_tier: (allMandatoryPassed && !hasDiscrepancy) ? 'BANK_CONFIRMED' : 'DISCREPANCY_FLAGGED',
           is_simulated: false,
-          status: hasDiscrepancy ? 'DISCREPANCY' : 'CONFIRMED',
+          status: (allMandatoryPassed && !hasDiscrepancy) ? 'CONFIRMED' : 'DISCREPANCY',
           verification_source: 'BANK_DIRECT_API',
           reference_id: bankData.transaction_ref || refId,
           timestamp,
           field_comparisons: {
             fdr_number: { submitted: input.fdr_number, confirmed: bankData.fdr_number || null, match: numberMatch },
             deposit_amount: { submitted: input.deposit_amount, confirmed: bankData.amount || null, match: amountMatch },
-            bank_name: { submitted: input.bank_name, confirmed: bankData.bank_name || null, match: true },
-            issue_date: { submitted: input.issue_date, confirmed: bankData.issue_date || null, match: bankData.issue_date === input.issue_date },
-            maturity_date: { submitted: input.maturity_date, confirmed: bankData.maturity_date || null, match: bankData.maturity_date === input.maturity_date },
+            bank_name: { submitted: input.bank_name, confirmed: bankData.bank_name || null, match: bankNameMatch },
+            issue_date: { submitted: input.issue_date, confirmed: bankData.issue_date || null, match: issueDateMatch },
+            maturity_date: { submitted: input.maturity_date, confirmed: bankData.maturity_date || null, match: maturityDateMatch },
             joint_lien: { submitted: Boolean(input.joint_lien_undertaking), confirmed: lienMatch, match: lienMatch }
           },
           discrepancies,
-          requires_human_scrutiny: hasDiscrepancy,
+          requires_human_scrutiny: !allMandatoryPassed || hasDiscrepancy,
           legal_disclosure: 'Live Core Banking Integration: Validated against authorized bank gateway API.'
         };
       }
@@ -421,6 +457,11 @@ export async function verifyIndividualFDRDetails(
   );
   if (!isRecognizedBank && cleanBank.length > 0) {
     discrepancies.push(`Issuing bank "${cleanBank}" is not listed in the RBI Scheduled Commercial Banks Registry.`);
+  }
+
+  // Joint-Lien clause check
+  if (!input.joint_lien_undertaking) {
+    discrepancies.push('AICTE Joint-Lien clause undertaking is missing or unconfirmed for this instrument.');
   }
 
   const hasDiscrepancy = discrepancies.length > 0;

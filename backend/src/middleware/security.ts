@@ -61,6 +61,18 @@ export function sanitizeError(err: any, fallbackMessage: string): { error: strin
   return { error: fallbackMessage, details: err?.message || String(err) };
 }
 
+// Strict rate limiter for public institution onboarding requests (anti-spam / abuse prevention)
+export const onboardingLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10, // 10 onboarding submissions per IP per hour
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many onboarding requests submitted from this IP. Please wait before submitting additional applications.',
+    status: 429
+  }
+});
+
 // Production-ready Helmet security headers conforming to GIGW & IT Act standards
 export const securityHeaders = helmet({
   contentSecurityPolicy: {

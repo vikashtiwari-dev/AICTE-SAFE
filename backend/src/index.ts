@@ -46,7 +46,8 @@ app.use(cors({
   origin: (origin, callback) => {
     // Permit server-to-server or requests without origin header (e.g. cron, health checks, curl)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+    // Strict origin matching: Never allow blanket *.vercel.app wildcard subdomains
+    if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
     return callback(new Error('Cross-Origin Request Blocked by AICTE-SAFE Security Policy'));
@@ -98,23 +99,31 @@ export function ensureDbInitialized(): Promise<void> {
 }
 
 // Health check verifies service and database connectivity for cloud serverless monitors
+// Sanitized: Never exposes raw database internal errors or credentials publicly; returns 503 on database failure
 app.get('/api/health', async (_req, res) => {
-  let dbStatus = 'untested';
-  let dbError = null;
+  let isDbHealthy = false;
   try {
     const row = await db.queryOne('SELECT 1 as connected');
-    dbStatus = row ? 'connected' : 'no_rows';
+    isDbHealthy = Boolean(row);
   } catch (err: any) {
-    dbStatus = 'error';
-    dbError = err.message;
+    // Log detailed failure privately on the server
+    console.error('🚨 [Health Check Failure] Database connectivity check failed:', err?.message || err);
+    isDbHealthy = false;
   }
 
-  res.json({
+  if (!isDbHealthy) {
+    return res.status(503).json({
+      status: 'unhealthy',
+      service: 'AICTE SAFE: Secure Automated FDR & Deposit Engine',
+      database: 'UNAVAILABLE',
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  return res.json({
     status: 'ok',
     service: 'AICTE SAFE: Secure Automated FDR & Deposit Engine',
-    database: 'PostgreSQL Sole Source of Truth',
-    db_status: dbStatus,
-    db_error: dbError,
+    database: 'CONNECTED',
     timestamp: new Date().toISOString()
   });
 });

@@ -13,23 +13,22 @@ import { verificationLimiter, documentLimiter, sanitizeError } from '../middlewa
 const router = express.Router();
 
 // POST /api/fdrs/ocr-extract - Honest AI / OCR entity extraction with mathematical confidence
-router.post('/ocr-extract', verificationLimiter, authenticate, upload.single('file'), async (req: AuthRequest, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG)' });
-    }
+router.post('/ocr-extract', verificationLimiter, authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), upload.single('file'), async (req: AuthRequest, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Please upload a bank certificate file (PDF, PNG, JPG)' });
+  }
 
+  const filePath = req.file.path;
+  try {
     const ext = path.extname(req.file.originalname).toLowerCase();
     if (ext === '.docx' || ext === '.doc') {
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.status(400).json({
         error: 'Automated OCR extraction supports PDF and image certificates. For DOCX files, please convert to PDF or enter details manually.'
       });
     }
 
-    const valResult = validateDocumentFile(req.file.path, req.file.originalname);
+    const valResult = validateDocumentFile(filePath, req.file.originalname);
     if (!valResult.valid) {
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.status(400).json({ error: valResult.error || 'Security rejection: Uploaded file signature does not match authentic document formats.' });
     }
 
@@ -38,10 +37,17 @@ router.post('/ocr-extract', verificationLimiter, authenticate, upload.single('fi
       fdr_number: req.body.declared_fdr_number,
     };
 
-    const extracted = await extractFDRFromDocument(req.file.path, submittedData);
+    const extracted = await extractFDRFromDocument(filePath, submittedData);
     return res.json(extracted);
   } catch (err: any) {
     return res.status(500).json({ error: 'OCR Extraction failed' });
+  } finally {
+    // Guaranteed bulletproof cleanup of staged OCR temporary file on all code paths
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (_) {}
   }
 });
 
@@ -108,7 +114,8 @@ router.post('/aph-calculate', authenticate, (req: AuthRequest, res) => {
 });
 
 // GET /api/fdrs - List with strict institution isolation & bounded pagination
-router.get('/', authenticate, async (req: AuthRequest, res) => {
+// Explicit role policy: admin, bureau_officer, viewer (read-only), institution_user (isolated to own id)
+router.get('/', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   const { status, verification_status, institution_id, search, page = '1', limit = '20', deposit_type } = req.query;
   const safePage = Math.max(1, parseInt(page as string) || 1);
   const safeLimit = Math.min(100, Math.max(1, parseInt(limit as string) || 20));
@@ -174,8 +181,8 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
   });
 });
 
-// GET /api/fdrs/:id - Single FDR with authorization check
-router.get('/:id', authenticate, async (req: AuthRequest, res) => {
+// GET /api/fdrs/:id - Single FDR with explicit role check and ownership verification
+router.get('/:id', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   const fdr = await db.prepare(`
     SELECT f.*, i.name as institution_name, i.aicte_id, i.contact_person, i.contact_email,
       u1.full_name as submitted_by_name, u2.full_name as verified_by_name, u3.full_name as last_updated_by_name,
@@ -516,6 +523,9 @@ router.post('/:id/bank-verify', verificationLimiter, authenticate, requireRole([
   }
 
   try {
+    // Respect institution-submitted lien status rather than assuming hardcoded true
+    const submittedLienStatus = Boolean(fdr.joint_lien_undertaking ?? fdr.joint_lien ?? false);
+
     const verificationResult = await verifyIndividualFDRDetails({
       fdr_number: fdr.fdr_number,
       bank_name: fdr.bank_name,
@@ -524,7 +534,7 @@ router.post('/:id/bank-verify', verificationLimiter, authenticate, requireRole([
       issue_date: fdr.issue_date,
       maturity_date: fdr.maturity_date,
       account_number: fdr.account_number,
-      joint_lien_undertaking: true
+      joint_lien_undertaking: submittedLienStatus
     });
 
     // Record attempt transactionally in fdr_verification_attempts
@@ -617,35 +627,33 @@ router.post('/:id/documents', documentLimiter, authenticate, requireRole(['admin
   upload.single('file'), async (req: AuthRequest, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-    // Enforce strict file magic signature and deep format verification
-    const valResult = validateDocumentFile(req.file.path, req.file.originalname);
-    if (!valResult.valid) {
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
-      return res.status(400).json({ error: valResult.error || 'Security validation failed: File headers do not match legitimate document formats (PDF, JPEG, PNG, DOCX).' });
-    }
-
-    const fdr = await db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
-    if (!fdr) {
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
-      return res.status(404).json({ error: 'FDR not found' });
-    }
-
-    // Strict institution ownership verification
-    if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
-      return res.status(403).json({ error: 'Forbidden: You cannot upload documents to an FDR belonging to another institution.' });
-    }
-
-    let sha256Hash = '0x' + crypto.randomBytes(32).toString('hex');
-    let fileBuffer: Buffer | null = null;
+    const stagedFilePath = req.file.path;
     try {
-      if (req.file.path && fs.existsSync(req.file.path)) {
-        fileBuffer = fs.readFileSync(req.file.path);
-        sha256Hash = '0x' + crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      // Enforce strict file magic signature and deep format verification
+      const valResult = validateDocumentFile(stagedFilePath, req.file.originalname);
+      if (!valResult.valid) {
+        return res.status(400).json({ error: valResult.error || 'Security validation failed: File headers do not match legitimate document formats (PDF, JPEG, PNG, DOCX).' });
       }
-    } catch (_) {}
 
-    try {
+      const fdr = await db.prepare('SELECT * FROM fdrs WHERE id = ?').get(req.params.id) as any;
+      if (!fdr) {
+        return res.status(404).json({ error: 'FDR not found' });
+      }
+
+      // Strict institution ownership verification
+      if (req.user!.role === 'institution_user' && fdr.institution_id !== req.user!.institution_id) {
+        return res.status(403).json({ error: 'Forbidden: You cannot upload documents to an FDR belonging to another institution.' });
+      }
+
+      let sha256Hash = '0x' + crypto.randomBytes(32).toString('hex');
+      let fileBuffer: Buffer | null = null;
+      try {
+        if (stagedFilePath && fs.existsSync(stagedFilePath)) {
+          fileBuffer = fs.readFileSync(stagedFilePath);
+          sha256Hash = '0x' + crypto.createHash('sha256').update(fileBuffer).digest('hex');
+        }
+      } catch (_) {}
+
       const createdDoc = await db.transaction(async (tx) => {
         const docType = req.body.document_type || 'Supporting_Doc';
 
@@ -675,9 +683,6 @@ router.post('/:id/documents', documentLimiter, authenticate, requireRole(['admin
           `, [docId, fileBuffer, req.file!.mimetype, req.file!.originalname]);
         }
 
-        // Clean up temporary local staging file so no sensitive unencrypted file remains on server disk
-        try { if (req.file?.path) fs.unlinkSync(req.file.path); } catch (_) {}
-
         await recordAuditLog(tx, {
           entity_type: 'FDR',
           entity_id: fdr.id,
@@ -693,11 +698,18 @@ router.post('/:id/documents', documentLimiter, authenticate, requireRole(['admin
       return res.status(201).json(createdDoc);
     } catch (err: any) {
       return res.status(500).json(sanitizeError(err, 'Failed to record document metadata'));
+    } finally {
+      // Guaranteed bulletproof cleanup of staged document file whether transaction succeeded or failed
+      try {
+        if (stagedFilePath && fs.existsSync(stagedFilePath)) {
+          fs.unlinkSync(stagedFilePath);
+        }
+      } catch (_) {}
     }
   });
 
 // GET /api/fdrs/:id/documents - List documents with ownership check
-router.get('/:id/documents', authenticate, async (req: AuthRequest, res) => {
+router.get('/:id/documents', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   const fdr = await db.prepare('SELECT institution_id FROM fdrs WHERE id = ?').get(req.params.id) as any;
   if (!fdr) return res.status(404).json({ error: 'FDR not found' });
 

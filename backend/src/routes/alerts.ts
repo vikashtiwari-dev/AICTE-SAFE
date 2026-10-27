@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { db, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest, resolveJWTSecret } from '../middleware/auth';
 import { sanitizeError } from '../middleware/security';
-import { generateAlerts, dispatchStatutoryNudges, runStatutoryEscalation, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
+import { generateAlerts, dispatchStatutoryNudges, runStatutoryEscalation, retryFailedNotifications, getAlertConfig, saveAlertConfig, DEFAULT_ALERT_CONFIG } from '../services/alertService';
 
 const router = express.Router();
 
@@ -51,6 +51,8 @@ const handleCronCheck = async (req: express.Request, res: express.Response) => {
     const alertsCreated = await generateAlerts();
     const nudgesDispatched = await dispatchStatutoryNudges();
     const escalations = await runStatutoryEscalation();
+    const retryResult = await retryFailedNotifications(20);
+
     return res.json({
       success: true,
       timestamp: new Date().toISOString(),
@@ -58,8 +60,10 @@ const handleCronCheck = async (req: express.Request, res: express.Response) => {
       new_alerts_created: alertsCreated,
       nudges_dispatched: nudgesDispatched,
       statutory_escalations: escalations,
+      notifications_retried: retryResult.total_retried,
+      notifications_succeeded: retryResult.succeeded,
       status: 'IDEMPOTENT_SCAN_COMPLETED',
-      notes: 'Monitors 90/30/10-day maturity windows, discrepancy flags, overdue lock-in violations, and multi-channel statutory reminders.'
+      notes: 'Monitors 90/30/10-day maturity windows, discrepancy flags, overdue lock-in violations, failed notification retries, and multi-channel statutory reminders.'
     });
   } catch (err: any) {
     return res.status(500).json(sanitizeError(err, 'Cron execution failed'));

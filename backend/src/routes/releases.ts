@@ -8,7 +8,8 @@ import { verificationLimiter, sanitizeError } from '../middleware/security';
 const router = express.Router();
 
 // GET /api/releases - List with institution isolation
-router.get('/', authenticate, async (req: AuthRequest, res) => {
+// Explicit role policy: admin, bureau_officer, viewer (read-only), institution_user (isolated to own id)
+router.get('/', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   const { status, request_type } = req.query;
 
   let whereClause = 'WHERE 1=1';

@@ -1,12 +1,13 @@
 import express from 'express';
 import { db, executeMutation, recordAuditLog } from '../db/database';
 import { authenticate, requireRole, AuthRequest } from '../middleware/auth';
-import { sanitizeError } from '../middleware/security';
+import { sanitizeError, onboardingLimiter } from '../middleware/security';
 
 const router = express.Router();
 
 // GET /api/institutions - list with summary statistics and institution isolation
-router.get('/', authenticate, async (req: AuthRequest, res) => {
+// Explicitly permitted roles: admin, bureau_officer, viewer (read-only), institution_user (isolated to own id)
+router.get('/', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   let whereClause = '';
   const params: any[] = [];
 
@@ -36,9 +37,9 @@ router.get('/', authenticate, async (req: AuthRequest, res) => {
   return res.json(institutions);
 });
 
-// GET /api/institutions/:id - Single institution with ownership enforcement
-router.get('/:id', authenticate, async (req: AuthRequest, res) => {
-  // Strict ownership check for institution user
+// GET /api/institutions/:id - Single institution with explicit role-permission matrix and ownership enforcement
+router.get('/:id', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
+  // Strict ownership check for institution user: Institution A can NEVER access Institution B
   if (req.user!.role === 'institution_user') {
     if (!req.user!.institution_id || Number(req.user!.institution_id) !== Number(req.params.id)) {
       return res.status(403).json({ error: 'Access denied: You can only access records of your assigned institution.' });
@@ -74,12 +75,25 @@ router.get('/:id', authenticate, async (req: AuthRequest, res) => {
   return res.json({ ...institution, fdrs });
 });
 
-// POST /api/institutions/requests - Submit onboarding request (Applicant colleges)
-router.post('/requests', async (req, res) => {
+// POST /api/institutions/requests - Submit onboarding request (Rate-limited, strictly validated schema)
+router.post('/requests', onboardingLimiter, async (req, res) => {
   const { aicte_id, name, address, state, city, contact_person, contact_email, contact_phone, institution_type, justification } = req.body;
 
-  if (!aicte_id || !name || !contact_email) {
-    return res.status(400).json({ error: 'AICTE ID, institution name, and contact email are required' });
+  // Strict schema and field length validations to prevent abuse
+  if (!aicte_id || typeof aicte_id !== 'string' || aicte_id.trim().length < 3 || aicte_id.trim().length > 50) {
+    return res.status(400).json({ error: 'Valid AICTE Permanent Application ID (3-50 characters) is mandatory.' });
+  }
+  if (!name || typeof name !== 'string' || name.trim().length < 3 || name.trim().length > 255) {
+    return res.status(400).json({ error: 'Institution Name (3-255 characters) is mandatory.' });
+  }
+  if (!contact_email || typeof contact_email !== 'string' || !contact_email.includes('@') || contact_email.length > 100) {
+    return res.status(400).json({ error: 'A valid official contact email address is required.' });
+  }
+  if (contact_phone && (typeof contact_phone !== 'string' || contact_phone.trim().length > 20)) {
+    return res.status(400).json({ error: 'Contact phone must not exceed 20 characters.' });
+  }
+  if (justification && (typeof justification !== 'string' || justification.trim().length > 1000)) {
+    return res.status(400).json({ error: 'Justification must not exceed 1000 characters.' });
   }
 
   const existing = await db.prepare('SELECT id FROM institutions WHERE aicte_id = ?').get(aicte_id);

@@ -47,7 +47,9 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
     req.user = payload;
     next();
   } catch (err: any) {
-    return res.status(401).json({ error: 'Invalid or expired token', message: err.message });
+    // Log exception privately on the server; never expose internal JWT details to callers
+    console.warn('⚠️ [Auth Warning] Token verification failed:', err?.message);
+    return res.status(401).json({ error: 'Invalid or expired authentication token' });
   }
 }
 

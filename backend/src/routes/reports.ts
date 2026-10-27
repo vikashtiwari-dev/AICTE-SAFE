@@ -1,13 +1,13 @@
 import express from 'express';
 import { db, verifyAuditChain } from '../db/database';
-import { authenticate, AuthRequest, maskAccountNumber } from '../middleware/auth';
+import { authenticate, requireRole, AuthRequest, maskAccountNumber } from '../middleware/auth';
 import { sanitizeError } from '../middleware/security';
 import { getImpactBenchmarkMetrics } from '../services/impactService';
 
 const router = express.Router();
 
 // GET /api/reports/summary - top-level dashboard metrics with fail-closed institution isolation
-router.get('/summary', authenticate, async (req: AuthRequest, res) => {
+router.get('/summary', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   let instFilter = '';
   const params: any[] = [];
 
@@ -89,7 +89,7 @@ router.get('/status-breakdown', authenticate, async (req: AuthRequest, res) => {
 });
 
 // GET /api/reports/expiring - FDRs expiring in 30/60/90 days
-router.get('/expiring', authenticate, async (req: AuthRequest, res) => {
+router.get('/expiring', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   let instFilter = '';
   const params: any[] = [];
   if (req.user!.role === 'institution_user') {
@@ -116,7 +116,7 @@ router.get('/expiring', authenticate, async (req: AuthRequest, res) => {
 });
 
 // GET /api/reports/institution-wise
-router.get('/institution-wise', authenticate, async (req: AuthRequest, res) => {
+router.get('/institution-wise', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {
   let whereClause = '';
   const params: any[] = [];
   if (req.user!.role === 'institution_user') {
@@ -146,9 +146,18 @@ router.get('/institution-wise', authenticate, async (req: AuthRequest, res) => {
   return res.json(data);
 });
 
-// GET /api/reports/audit-log
-router.get('/audit-log', authenticate, async (req: AuthRequest, res) => {
+// GET /api/reports/audit-log - Bounded pagination and explicit role enforcement
+// Only administrators, bureau officers, and institution users (isolated to own records) can view audit logs
+router.get('/audit-log', authenticate, requireRole(['admin', 'bureau_officer', 'institution_user']), async (req: AuthRequest, res) => {
   const { entity_type, limit = '50' } = req.query;
+
+  // Enforce clamped, safe pagination bounds: min 1, default 50, max 200
+  let parsedLimit = parseInt(String(limit), 10);
+  if (isNaN(parsedLimit) || parsedLimit < 1) {
+    parsedLimit = 50;
+  } else if (parsedLimit > 200) {
+    parsedLimit = 200;
+  }
 
   let whereClause = 'WHERE 1=1';
   const params: any[] = [];
@@ -173,7 +182,7 @@ router.get('/audit-log', authenticate, async (req: AuthRequest, res) => {
     ${whereClause}
     ORDER BY COALESCE(a.changed_at, a.timestamp) DESC
     LIMIT ?
-  `).all(...params, parseInt(limit as string)) as any[];
+  `).all(...params, parsedLimit) as any[];
 
   return res.json(logs);
 });

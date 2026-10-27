@@ -236,6 +236,7 @@ export const Reports: React.FC = () => {
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
                       <th className="py-3 px-4">Evaluation Criterion</th>
+                      <th className="py-3 px-4">Data Type</th>
                       <th className="py-3 px-4">Manual Paper-Based Baseline</th>
                       <th className="py-3 px-4">AICTE-SAFE Automated Portal</th>
                       <th className="py-3 px-4">Measured Improvement</th>
@@ -248,6 +249,17 @@ export const Reports: React.FC = () => {
                         <td className="py-3 px-4">
                           <span className="font-bold text-slate-900 block">{b.metric_name}</span>
                           <span className="text-[10px] text-slate-400 uppercase tracking-wider">{b.category}</span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
+                            b.data_type === 'EMPIRICAL_LIVE' 
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                              : b.data_type === 'MEASURED_STUDY'
+                              ? 'bg-purple-100 text-purple-800 border border-purple-300'
+                              : 'bg-amber-100 text-amber-800 border border-amber-300'
+                          }`}>
+                            {b.data_type === 'EMPIRICAL_LIVE' ? 'Live DB' : b.data_type === 'MEASURED_STUDY' ? 'Study' : 'Estimate'}
+                          </span>
                         </td>
                         <td className="py-3 px-4 text-slate-600 max-w-xs">{b.manual_baseline}</td>
                         <td className="py-3 px-4 text-blue-800 font-semibold max-w-xs">{b.aicte_safe_portal}</td>

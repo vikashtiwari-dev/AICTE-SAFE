@@ -56,9 +56,20 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// Avoid stream drain hangs in serverless environments when body is pre-parsed by runtime
+// Avoid stream drain hangs in serverless environments when body is pre-parsed or drained by runtime
 app.use((req: any, _res: any, next: any) => {
-  if (req.body && typeof req.body === 'object') {
+  if (req.body !== undefined && req.body !== null) {
+    if (typeof req.body === 'string' && (req.body.trim().startsWith('{') || req.body.trim().startsWith('['))) {
+      try {
+        req.body = JSON.parse(req.body);
+      } catch (_) {}
+    } else if (Buffer.isBuffer(req.body)) {
+      try {
+        req.body = JSON.parse(req.body.toString('utf8'));
+      } catch (_) {}
+    }
+    req._body = true;
+  } else if (req.readableEnded || req.complete) {
     req._body = true;
   }
   next();

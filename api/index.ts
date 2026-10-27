@@ -40,8 +40,20 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  // When running on Vercel, if req.body is already parsed by runtime, mark req._body = true to avoid express body-parser hanging on drained stream
-  if (req.body && typeof req.body === 'object') {
+  // When running on Vercel, serverless runtime buffers request body and drains stream.
+  // Parse string/Buffer bodies and mark _body = true to prevent Express body-parser from hanging on drained streams.
+  if (req.body !== undefined && req.body !== null) {
+    if (typeof req.body === 'string' && (req.body.trim().startsWith('{') || req.body.trim().startsWith('['))) {
+      try {
+        req.body = JSON.parse(req.body);
+      } catch (_) {}
+    } else if (Buffer.isBuffer(req.body)) {
+      try {
+        req.body = JSON.parse(req.body.toString('utf8'));
+      } catch (_) {}
+    }
+    (req as any)._body = true;
+  } else if (req.readableEnded || req.complete) {
     (req as any)._body = true;
   }
 

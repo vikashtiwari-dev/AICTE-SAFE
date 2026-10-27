@@ -15,35 +15,9 @@ dotenv.config();
 dotenv.config({ path: path.resolve(__dirname, '../backend/.env') });
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
-
-let app: any = null;
-let loadError: any = null;
-
-try {
-  let backendModule: any = null;
-  try {
-    backendModule = require('../backend/dist/index');
-  } catch (_) {
-    backendModule = require('../backend/src/index');
-  }
-  app = backendModule.default || backendModule;
-} catch (err: any) {
-  console.error('Fatal Backend Load Error:', err);
-  loadError = {
-    message: err?.message || String(err),
-    stack: err?.stack,
-    name: err?.name,
-  };
-}
+import app from '../backend/src/index';
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
-  if (loadError) {
-    return res.status(500).json({
-      error: 'Backend Module Load Error in Serverless Function',
-      details: loadError.message,
-      stack: loadError.stack,
-    });
-  }
 
   // When running on Vercel, serverless runtime buffers request body and drains stream.
   // Parse string/Buffer bodies and mark _body = true to prevent Express body-parser from hanging on drained streams.

@@ -113,6 +113,70 @@ router.post('/aph-calculate', authenticate, (req: AuthRequest, res) => {
   return res.json(result);
 });
 
+// GET /api/fdrs/public-verify - Public Search / Verification (Rate-limited, sanitized, zero token exposure)
+router.get('/public-verify', verificationLimiter, async (req, res) => {
+  const query = ((req.query.q || req.query.query || '') as string).trim();
+  if (!query || query.length < 3) {
+    return res.status(400).json({ error: 'Please enter a valid FDR Number or AICTE Permanent Institute ID (PID)' });
+  }
+
+  try {
+    const fdr = await db.prepare(`
+      SELECT 
+        f.fdr_number,
+        f.bank_name,
+        f.branch_name,
+        f.deposit_amount,
+        f.issue_date,
+        f.maturity_date,
+        f.status,
+        f.verification_status,
+        f.joint_lien_undertaking,
+        f.deposit_type,
+        i.name as institution_name,
+        i.aicte_id,
+        i.state,
+        i.city
+      FROM fdrs f
+      LEFT JOIN institutions i ON f.institution_id = i.id
+      WHERE UPPER(f.fdr_number) = UPPER(?) OR UPPER(i.aicte_id) = UPPER(?)
+      LIMIT 1
+    `).get(query, query) as any;
+
+    if (!fdr) {
+      return res.status(404).json({
+        found: false,
+        message: 'No matching deposit record found for the provided identifier. Please ensure the FDR Number or AICTE Institute ID is correct.'
+      });
+    }
+
+    // Mask sensitive details for public security compliance
+    const maskedFdrNumber = fdr.fdr_number.length > 4 
+      ? fdr.fdr_number.substring(0, 3) + '••••' + fdr.fdr_number.substring(fdr.fdr_number.length - 2)
+      : '••••';
+
+    return res.json({
+      found: true,
+      data: {
+        fdr_number_masked: maskedFdrNumber,
+        institution_name: fdr.institution_name,
+        aicte_id: fdr.aicte_id,
+        bank_name: fdr.bank_name,
+        branch_name: fdr.branch_name,
+        deposit_type: fdr.deposit_type,
+        issue_date: fdr.issue_date,
+        maturity_date: fdr.maturity_date,
+        status: fdr.status,
+        verification_status: fdr.verification_status,
+        has_joint_lien: Boolean(fdr.joint_lien_undertaking),
+        location: `${fdr.city || ''}, ${fdr.state || ''}`.replace(/^,\s*|,\s*$/g, '')
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json(sanitizeError(err, 'Failed to perform public instrument verification'));
+  }
+});
+
 // GET /api/fdrs - List with strict institution isolation & bounded pagination
 // Explicit role policy: admin, bureau_officer, viewer (read-only), institution_user (isolated to own id)
 router.get('/', authenticate, requireRole(['admin', 'bureau_officer', 'viewer', 'institution_user']), async (req: AuthRequest, res) => {

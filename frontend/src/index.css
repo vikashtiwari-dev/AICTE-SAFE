@@ -2,8 +2,42 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg-canvas: #06070a;
+  --bg-surface: #0b0b0d;
+  --bg-card: rgba(18, 18, 22, 0.85);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-highlight: rgba(255, 255, 255, 0.16);
+  --apple-blue: #0071e3;
+  --apple-blue-bright: #2997ff;
+  --apple-green: #30d158;
+  --apple-orange: #ff9f0a;
+  --apple-red: #ff453a;
+  --apple-purple: #bf5af2;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+  background-color: var(--bg-canvas);
+  color: #f1f5f9;
+}
+
+/* Glassmorphism Surface utility */
+.glass-panel {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+}
+
+.glass-panel-hover {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel-hover:hover {
+  border-color: var(--border-highlight);
+  background: rgba(24, 24, 30, 0.95);
+  box-shadow: 0 10px 30px -10px rgba(0, 113, 227, 0.15);
 }

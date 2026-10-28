@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import api from '../api/client';
 import {
@@ -12,21 +12,18 @@ import {
   Lock,
   ArrowRight,
   ExternalLink,
-  BookOpen,
   Award,
   RefreshCw,
   Landmark,
   Scale,
-  PhoneCall,
   Mail,
-  HelpCircle,
   ChevronRight,
+  Sparkles,
 } from 'lucide-react';
 import { InstitutionRequestModal } from '../components/InstitutionRequestModal';
 
 export const Landing: React.FC = () => {
   const { user } = useAuth();
-  const navigate = useNavigate();
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -58,16 +55,20 @@ export const Landing: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans selection:bg-blue-600 selection:text-white">
-      {/* 1. National Top Banner (GIGW Compliant) */}
-      <div className="bg-slate-900 text-slate-300 text-xs py-1.5 px-4 sm:px-8 border-b border-slate-800">
+    <div className="min-h-screen bg-[#06070a] text-[#f1f5f9] flex flex-col font-sans selection:bg-[#0071e3] selection:text-white relative overflow-hidden">
+      {/* Background Glow Orbs in Capacity-Connect Style */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] bg-gradient-to-b from-[#0071e3]/15 via-[#2997ff]/5 to-transparent blur-3xl pointer-events-none -z-10" />
+      <div className="absolute top-[600px] left-1/4 w-[500px] h-[300px] bg-[#bf5af2]/5 blur-3xl pointer-events-none -z-10" />
+
+      {/* 1. National Top Strip */}
+      <div className="bg-[#0b0b0d] text-slate-400 text-xs py-2 px-4 sm:px-8 border-b border-white/5">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="font-semibold text-white">भारत सरकार | Government of India</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-[#30d158] animate-pulse"></span>
+              <span className="font-semibold text-slate-200">भारत सरकार | Government of India</span>
             </span>
-            <span className="hidden md:inline text-slate-500">•</span>
+            <span className="hidden md:inline text-slate-700">•</span>
             <span className="hidden md:inline text-slate-400">शिक्षा मंत्रालय (Ministry of Education)</span>
           </div>
           <div className="flex items-center gap-4 text-[11px]">
@@ -78,23 +79,22 @@ export const Landing: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Institutional Masthead Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs">
+      {/* 2. Sleek Glassmorphism Header */}
+      <header className="sticky top-0 z-40 bg-[#06070a]/80 backdrop-blur-md border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 sm:px-8 h-20 flex items-center justify-between">
           {/* Logo & Bureau Titles */}
           <div className="flex items-center gap-3.5">
-            <div className="w-12 h-12 rounded-xl bg-[#003366] text-white flex items-center justify-center shadow-md border border-[#002244] shrink-0">
-              <ShieldCheck className="w-7 h-7 text-amber-400" />
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#0071e3] to-[#004fb0] text-white flex items-center justify-center shadow-[0_0_20px_rgba(0,113,227,0.4)] border border-white/20 shrink-0">
+              <ShieldCheck className="w-6 h-6 text-[#2997ff]" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-xl font-extrabold tracking-tight text-[#003366]">AICTE SAFE</span>
-                <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded border border-amber-300">
+                <span className="text-xl font-extrabold tracking-tight text-white">AICTE SAFE</span>
+                <span className="bg-[#0071e3]/20 text-[#2997ff] text-[10px] font-bold px-2 py-0.5 rounded-md border border-[#0071e3]/30">
                   NATIONAL PORTAL
                 </span>
               </div>
-              <p className="text-xs font-semibold text-slate-700">अखिल भारतीय तकनीकी शिक्षा परिषद</p>
-              <p className="text-[11px] text-slate-500">Bureau of Approval • Fixed Deposit Receipt & Joint-Lien Portal</p>
+              <p className="text-xs text-slate-400 font-medium">अखिल भारतीय तकनीकी शिक्षा परिषद</p>
             </div>
           </div>
 
@@ -102,16 +102,16 @@ export const Landing: React.FC = () => {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setIsOnboardingModalOpen(true)}
-              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors border border-slate-300"
+              className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-300 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-white/20"
             >
-              <Building2 className="w-4 h-4 text-blue-600" />
+              <Building2 className="w-4 h-4 text-[#2997ff]" />
               <span>Institute Onboarding</span>
             </button>
 
             {user ? (
               <Link
                 to="/dashboard"
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm transition-all"
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-[#0071e3] hover:bg-[#2997ff] rounded-xl shadow-[0_0_20px_rgba(0,113,227,0.4)] transition-all hover:scale-[1.02]"
               >
                 <span>Go to Dashboard</span>
                 <ArrowRight className="w-4 h-4" />
@@ -119,9 +119,9 @@ export const Landing: React.FC = () => {
             ) : (
               <Link
                 to="/login"
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-[#003366] hover:bg-[#002244] rounded-lg shadow-sm transition-all"
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-[#0071e3] to-[#2997ff] hover:opacity-95 rounded-xl shadow-[0_0_20px_rgba(0,113,227,0.3)] transition-all hover:scale-[1.02]"
               >
-                <Lock className="w-3.5 h-3.5 text-amber-400" />
+                <Lock className="w-3.5 h-3.5" />
                 <span>Portal Sign In</span>
               </Link>
             )}
@@ -130,36 +130,38 @@ export const Landing: React.FC = () => {
       </header>
 
       {/* 3. Hero Section */}
-      <section className="bg-gradient-to-b from-blue-50/60 via-white to-slate-50 border-b border-slate-200 py-16 px-4 sm:px-8">
+      <section className="py-20 px-4 sm:px-8 relative">
         <div className="max-w-4xl mx-auto text-center space-y-6">
-          <div className="inline-flex items-center gap-2 bg-blue-100/80 border border-blue-200 text-blue-900 px-3.5 py-1.5 rounded-full text-xs font-semibold">
-            <Scale className="w-4 h-4 text-blue-700" />
+          <div className="inline-flex items-center gap-2 bg-[#0071e3]/10 border border-[#0071e3]/30 text-[#2997ff] px-4 py-1.5 rounded-full text-xs font-semibold backdrop-blur-md">
+            <Sparkles className="w-3.5 h-3.5" />
             <span>Statutory Deposit Custodian • Approval Process Handbook (APH 2024–27)</span>
           </div>
 
-          <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-[1.15]">
             Centralized Fixed Deposit & <br />
-            <span className="text-[#003366]">Joint-Lien Monitoring Engine</span>
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#60a5fa] to-[#a855f7]">
+              Joint-Lien Monitoring Engine
+            </span>
           </h1>
 
-          <p className="text-slate-600 text-sm sm:text-base max-w-2xl mx-auto leading-relaxed">
+          <p className="text-slate-400 text-sm sm:text-base max-w-2xl mx-auto leading-relaxed">
             AICTE-SAFE protects student and regulatory interests through automated tripartite verification of institutional security deposits with Scheduled Commercial Banks, SFMS messaging, and tamper-evident digital release certifications.
           </p>
 
-          {/* Quick CTA row */}
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+          {/* Action Buttons */}
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-4">
             <a
               href="#verification"
-              className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md transition-all"
+              className="inline-flex items-center gap-2 px-6 py-3 text-sm font-bold text-white bg-[#0071e3] hover:bg-[#2997ff] rounded-xl shadow-[0_0_25px_rgba(0,113,227,0.5)] transition-all hover:scale-[1.02]"
             >
               <Search className="w-4 h-4" />
               <span>Public FDR / PID Verification</span>
             </a>
             <Link
               to="/login"
-              className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl shadow-xs transition-all"
+              className="inline-flex items-center gap-2 px-6 py-3 text-sm font-semibold text-slate-300 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all hover:border-white/25"
             >
-              <Lock className="w-4 h-4 text-slate-500" />
+              <Lock className="w-4 h-4 text-[#2997ff]" />
               <span>Authorized Official Access</span>
             </Link>
           </div>
@@ -167,14 +169,14 @@ export const Landing: React.FC = () => {
       </section>
 
       {/* 4. Public Instrument Verification Widget */}
-      <section id="verification" className="py-14 px-4 sm:px-8 max-w-5xl mx-auto w-full">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xl p-6 sm:p-8">
+      <section id="verification" className="py-14 px-4 sm:px-8 max-w-4xl mx-auto w-full">
+        <div className="bg-[#0e1017]/90 rounded-2xl border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.6)] p-6 sm:p-8 backdrop-blur-xl relative">
           <div className="text-center max-w-xl mx-auto mb-6">
-            <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-blue-50 text-blue-700 mb-2">
+            <div className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[#0071e3]/10 text-[#2997ff] border border-[#0071e3]/20 mb-2">
               <Search className="w-5 h-5" />
             </div>
-            <h2 className="text-xl font-bold text-slate-900">Public Instrument & Lien Status Search</h2>
-            <p className="text-xs text-slate-500 mt-1">
+            <h2 className="text-xl font-bold text-white">Public Instrument & Lien Status Search</h2>
+            <p className="text-xs text-slate-400 mt-1">
               Verify statutory deposit authenticity, AICTE joint-lien marking, and validity period directly against registry records.
             </p>
           </div>
@@ -187,13 +189,13 @@ export const Landing: React.FC = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Enter FDR Number (e.g. FDR-2024-001) or AICTE PID (e.g. 1-10961234)"
-                className="w-full px-4 py-3 rounded-xl border border-slate-300 bg-slate-50 text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all font-mono"
+                className="w-full px-4 py-3 rounded-xl border border-white/10 bg-[#06070a] text-white text-sm focus:outline-hidden focus:ring-2 focus:ring-[#0071e3] focus:border-[#0071e3] transition-all font-mono placeholder:text-slate-600"
               />
             </div>
             <button
               type="submit"
               disabled={searching}
-              className="px-6 py-3 rounded-xl bg-[#003366] hover:bg-[#002244] text-white text-sm font-bold flex items-center justify-center gap-2 transition-colors disabled:opacity-50 shrink-0"
+              className="px-6 py-3 rounded-xl bg-gradient-to-r from-[#0071e3] to-[#2997ff] hover:opacity-90 text-white text-sm font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-50 shrink-0 shadow-[0_0_20px_rgba(0,113,227,0.3)]"
             >
               {searching ? (
                 <>
@@ -211,29 +213,29 @@ export const Landing: React.FC = () => {
 
           {/* Search Error */}
           {searchError && (
-            <div className="mt-4 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2 max-w-2xl mx-auto">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="mt-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2 max-w-2xl mx-auto">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
               <span>{searchError}</span>
             </div>
           )}
 
           {/* Search Result Card */}
           {searchResult && (
-            <div className="mt-6 p-6 rounded-xl bg-gradient-to-br from-slate-50 to-blue-50/40 border border-blue-200 max-w-2xl mx-auto shadow-xs">
-              <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4 mb-4">
+            <div className="mt-6 p-6 rounded-xl bg-[#141824]/80 border border-white/10 max-w-2xl mx-auto backdrop-blur-md">
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4 mb-4">
                 <div>
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#2997ff]">
                     Verified Statutory Instrument
                   </span>
-                  <h3 className="text-lg font-bold text-slate-900">{searchResult.institution_name}</h3>
-                  <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  <h3 className="text-lg font-bold text-white">{searchResult.institution_name}</h3>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">
                     AICTE PID: {searchResult.aicte_id} • {searchResult.location}
                   </p>
                 </div>
                 <span className={`px-2.5 py-1 rounded-full text-xs font-bold shrink-0 border ${
                   searchResult.verification_status === 'BANK_CONFIRMED'
-                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                    : 'bg-amber-100 text-amber-800 border-amber-300'
+                    ? 'bg-[#30d158]/15 text-[#30d158] border-[#30d158]/30'
+                    : 'bg-[#ff9f0a]/15 text-[#ff9f0a] border-[#ff9f0a]/30'
                 }`}>
                   {searchResult.verification_status}
                 </span>
@@ -241,33 +243,33 @@ export const Landing: React.FC = () => {
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs">
                 <div>
-                  <span className="text-slate-400 block">FDR Instrument No:</span>
-                  <span className="font-mono font-semibold text-slate-800">{searchResult.fdr_number_masked}</span>
+                  <span className="text-slate-500 block">FDR Instrument No:</span>
+                  <span className="font-mono font-semibold text-slate-200">{searchResult.fdr_number_masked}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block">Issuing Depository:</span>
-                  <span className="font-semibold text-slate-800">{searchResult.bank_name}</span>
+                  <span className="text-slate-500 block">Issuing Depository:</span>
+                  <span className="font-semibold text-slate-200">{searchResult.bank_name}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block">Joint-Lien Status:</span>
+                  <span className="text-slate-500 block">Joint-Lien Status:</span>
                   <span className={`font-semibold inline-flex items-center gap-1 ${
-                    searchResult.has_joint_lien ? 'text-emerald-700' : 'text-amber-700'
+                    searchResult.has_joint_lien ? 'text-[#30d158]' : 'text-[#ff9f0a]'
                   }`}>
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     {searchResult.has_joint_lien ? 'AICTE Lien Marked' : 'Pending Formal Deed'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block">Issue Date:</span>
-                  <span className="font-semibold text-slate-700">{new Date(searchResult.issue_date).toLocaleDateString('en-IN')}</span>
+                  <span className="text-slate-500 block">Issue Date:</span>
+                  <span className="font-semibold text-slate-300">{new Date(searchResult.issue_date).toLocaleDateString('en-IN')}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block">Maturity Date:</span>
-                  <span className="font-semibold text-slate-700">{new Date(searchResult.maturity_date).toLocaleDateString('en-IN')}</span>
+                  <span className="text-slate-500 block">Maturity Date:</span>
+                  <span className="font-semibold text-slate-300">{new Date(searchResult.maturity_date).toLocaleDateString('en-IN')}</span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block">Deposit Category:</span>
-                  <span className="font-semibold text-slate-700">{searchResult.deposit_type}</span>
+                  <span className="text-slate-500 block">Deposit Category:</span>
+                  <span className="font-semibold text-slate-300">{searchResult.deposit_type}</span>
                 </div>
               </div>
             </div>
@@ -276,43 +278,43 @@ export const Landing: React.FC = () => {
       </section>
 
       {/* 5. Statutory Regulatory Framework & APH Highlights */}
-      <section id="aph" className="py-14 bg-white border-y border-slate-200 px-4 sm:px-8">
+      <section id="aph" className="py-16 bg-[#090b10] border-y border-white/5 px-4 sm:px-8">
         <div className="max-w-7xl mx-auto">
           <div className="text-center max-w-2xl mx-auto mb-10">
-            <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Mandatory Compliance</span>
-            <h2 className="text-2xl font-bold text-slate-900 mt-1">Approval Process Handbook (APH) Provisions</h2>
-            <p className="text-xs text-slate-500 mt-1">
+            <span className="text-xs font-bold text-[#2997ff] uppercase tracking-wider">Mandatory Compliance</span>
+            <h2 className="text-2xl sm:text-3xl font-bold text-white mt-1">Approval Process Handbook (APH) Provisions</h2>
+            <p className="text-xs text-slate-400 mt-1">
               Regulations governing security deposit custody, lock-in terms, and premature encashment safeguards.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center mb-4">
+            <div className="p-6 rounded-2xl bg-[#0e1017] border border-white/10 hover:border-[#0071e3]/40 transition-all group">
+              <div className="w-10 h-10 rounded-xl bg-[#0071e3]/10 text-[#2997ff] flex items-center justify-center mb-4 border border-[#0071e3]/20">
                 <Landmark className="w-5 h-5" />
               </div>
-              <h3 className="text-base font-bold text-slate-900 mb-2">Chapter I: New Establishment</h3>
-              <p className="text-xs text-slate-600 leading-relaxed">
+              <h3 className="text-base font-bold text-white mb-2 group-hover:text-[#2997ff] transition-colors">Chapter I: New Establishment</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
                 Mandatory FDR creation in joint name with AICTE for establishing technical institutions. Lock-in period of 8–10 years strictly enforced to safeguard student and faculty interests.
               </p>
             </div>
 
-            <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-4">
+            <div className="p-6 rounded-2xl bg-[#0e1017] border border-white/10 hover:border-[#30d158]/40 transition-all group">
+              <div className="w-10 h-10 rounded-xl bg-[#30d158]/10 text-[#30d158] flex items-center justify-center mb-4 border border-[#30d158]/20">
                 <FileCheck2 className="w-5 h-5" />
               </div>
-              <h3 className="text-base font-bold text-slate-900 mb-2">Format 1: Joint-Lien Deed</h3>
-              <p className="text-xs text-slate-600 leading-relaxed">
+              <h3 className="text-base font-bold text-white mb-2 group-hover:text-[#30d158] transition-colors">Format 1: Joint-Lien Deed</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
                 Depository bank branch must register AICTE lien on core banking records. Premature liquidation without written council authorization constitutes a statutory banking violation.
               </p>
             </div>
 
-            <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200">
-              <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center mb-4">
+            <div className="p-6 rounded-2xl bg-[#0e1017] border border-white/10 hover:border-[#bf5af2]/40 transition-all group">
+              <div className="w-10 h-10 rounded-xl bg-[#bf5af2]/10 text-[#bf5af2] flex items-center justify-center mb-4 border border-[#bf5af2]/20">
                 <Award className="w-5 h-5" />
               </div>
-              <h3 className="text-base font-bold text-slate-900 mb-2">Digital NOC & Release</h3>
-              <p className="text-xs text-slate-600 leading-relaxed">
+              <h3 className="text-base font-bold text-white mb-2 group-hover:text-[#bf5af2] transition-colors">Digital NOC & Release</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
                 Upon successful fulfillment of all regulatory conditions, AICTE generates a digitally signed, QR-verifiable No-Objection Release Certificate for the bank branch manager.
               </p>
             </div>
@@ -321,56 +323,56 @@ export const Landing: React.FC = () => {
       </section>
 
       {/* 6. Three-Party Operational Workflow */}
-      <section className="py-14 px-4 sm:px-8 max-w-7xl mx-auto">
+      <section className="py-16 px-4 sm:px-8 max-w-7xl mx-auto">
         <div className="text-center max-w-2xl mx-auto mb-10">
-          <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Automated Lifecycle</span>
-          <h2 className="text-2xl font-bold text-slate-900 mt-1">Tripartite Verification Workflow</h2>
-          <p className="text-xs text-slate-500 mt-1">
+          <span className="text-xs font-bold text-[#2997ff] uppercase tracking-wider">Automated Lifecycle</span>
+          <h2 className="text-2xl sm:text-3xl font-bold text-white mt-1">Tripartite Verification Workflow</h2>
+          <p className="text-xs text-slate-400 mt-1">
             End-to-end transparency connecting Institutions, Depository Banks, and Council Bureaus.
           </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="p-5 bg-white rounded-xl border border-slate-200 text-center space-y-2">
-            <span className="w-8 h-8 rounded-full bg-blue-100 text-blue-800 font-bold text-xs inline-flex items-center justify-center">1</span>
-            <h4 className="font-bold text-sm text-slate-800">FDR Submission</h4>
-            <p className="text-xs text-slate-500 leading-normal">
+          <div className="p-5 bg-[#0e1017] rounded-xl border border-white/10 text-center space-y-2 hover:border-[#0071e3]/40 transition-all">
+            <span className="w-8 h-8 rounded-full bg-[#0071e3]/20 text-[#2997ff] font-bold text-xs inline-flex items-center justify-center border border-[#0071e3]/30">1</span>
+            <h4 className="font-bold text-sm text-white">FDR Submission</h4>
+            <p className="text-xs text-slate-400 leading-normal">
               College creates FDR in joint name and uploads scanned copy with signed Format 1 undertaking.
             </p>
           </div>
 
-          <div className="p-5 bg-white rounded-xl border border-slate-200 text-center space-y-2">
-            <span className="w-8 h-8 rounded-full bg-blue-100 text-blue-800 font-bold text-xs inline-flex items-center justify-center">2</span>
-            <h4 className="font-bold text-sm text-slate-800">OCR & SFMS Check</h4>
-            <p className="text-xs text-slate-500 leading-normal">
+          <div className="p-5 bg-[#0e1017] rounded-xl border border-white/10 text-center space-y-2 hover:border-[#0071e3]/40 transition-all">
+            <span className="w-8 h-8 rounded-full bg-[#0071e3]/20 text-[#2997ff] font-bold text-xs inline-flex items-center justify-center border border-[#0071e3]/30">2</span>
+            <h4 className="font-bold text-sm text-white">OCR & SFMS Check</h4>
+            <p className="text-xs text-slate-400 leading-normal">
               Automated OCR extracts document tokens, while banking API cross-verifies IFSC and branch authenticity.
             </p>
           </div>
 
-          <div className="p-5 bg-white rounded-xl border border-slate-200 text-center space-y-2">
-            <span className="w-8 h-8 rounded-full bg-blue-100 text-blue-800 font-bold text-xs inline-flex items-center justify-center">3</span>
-            <h4 className="font-bold text-sm text-slate-800">Daily Cron Audit</h4>
-            <p className="text-xs text-slate-500 leading-normal">
+          <div className="p-5 bg-[#0e1017] rounded-xl border border-white/10 text-center space-y-2 hover:border-[#0071e3]/40 transition-all">
+            <span className="w-8 h-8 rounded-full bg-[#0071e3]/20 text-[#2997ff] font-bold text-xs inline-flex items-center justify-center border border-[#0071e3]/30">3</span>
+            <h4 className="font-bold text-sm text-white">Daily Cron Audit</h4>
+            <p className="text-xs text-slate-400 leading-normal">
               Automated scheduler continuously tracks maturity at T-90, 60, 30 days and calculates institutional health scores.
             </p>
           </div>
 
-          <div className="p-5 bg-white rounded-xl border border-slate-200 text-center space-y-2">
-            <span className="w-8 h-8 rounded-full bg-blue-100 text-blue-800 font-bold text-xs inline-flex items-center justify-center">4</span>
-            <h4 className="font-bold text-sm text-slate-800">Digital NOC Release</h4>
-            <p className="text-xs text-slate-500 leading-normal">
+          <div className="p-5 bg-[#0e1017] rounded-xl border border-white/10 text-center space-y-2 hover:border-[#0071e3]/40 transition-all">
+            <span className="w-8 h-8 rounded-full bg-[#0071e3]/20 text-[#2997ff] font-bold text-xs inline-flex items-center justify-center border border-[#0071e3]/30">4</span>
+            <h4 className="font-bold text-sm text-white">Digital NOC Release</h4>
+            <p className="text-xs text-slate-400 leading-normal">
               Bureau scrutiny clears release upon term completion; generates tamper-proof QR certificate for bank discharge.
             </p>
           </div>
         </div>
       </section>
 
-      {/* 7. Institutional Helpdesk & Footer */}
-      <footer id="helpdesk" className="bg-slate-900 text-slate-400 text-xs border-t border-slate-800 py-12 px-4 sm:px-8 mt-auto">
+      {/* 7. Footer */}
+      <footer id="helpdesk" className="bg-[#0b0b0d] text-slate-400 text-xs border-t border-white/10 py-12 px-4 sm:px-8 mt-auto">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
           <div>
             <div className="flex items-center gap-2 mb-3">
-              <ShieldCheck className="w-5 h-5 text-amber-400" />
+              <ShieldCheck className="w-5 h-5 text-[#2997ff]" />
               <span className="text-white font-bold text-sm">AICTE SAFE PORTAL</span>
             </div>
             <p className="text-slate-400 text-xs leading-relaxed">
@@ -390,8 +392,8 @@ export const Landing: React.FC = () => {
           <div>
             <h4 className="text-white font-semibold text-xs mb-3 uppercase tracking-wider">Official Helpdesk & Inquiries</h4>
             <p className="text-slate-400 text-xs leading-relaxed flex items-center gap-2 mb-2">
-              <Mail className="w-4 h-4 text-blue-400 shrink-0" />
-              <a href="mailto:aictesafe.org@gmail.com" className="text-blue-400 hover:underline">
+              <Mail className="w-4 h-4 text-[#2997ff] shrink-0" />
+              <a href="mailto:aictesafe.org@gmail.com" className="text-[#2997ff] hover:underline">
                 aictesafe.org@gmail.com
               </a>
             </p>
@@ -401,7 +403,7 @@ export const Landing: React.FC = () => {
           </div>
         </div>
 
-        <div className="max-w-7xl mx-auto pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px]">
+        <div className="max-w-7xl mx-auto pt-6 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px]">
           <p>© {new Date().getFullYear()} All India Council for Technical Education (AICTE). All Rights Reserved.</p>
           <div className="flex items-center gap-4">
             <Link to="/login" className="hover:text-white transition-colors">Portal Sign In</Link>

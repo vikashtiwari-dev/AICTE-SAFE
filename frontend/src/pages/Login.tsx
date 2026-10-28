@@ -178,9 +178,20 @@ export const Login: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <p className="text-center text-xs text-slate-500 mt-6">
-          Official Portal • All India Council for Technical Education, Ministry of Education, Govt. of India
-        </p>
+        <div className="mt-6 text-center space-y-1">
+          <p className="text-xs text-slate-400">
+            Official Portal • All India Council for Technical Education, Govt. of India
+          </p>
+          <p className="text-xs text-slate-400 flex items-center justify-center gap-1.5">
+            <span>Official Support & Inquiries:</span>
+            <a
+              href="mailto:aictesafe.org@gmail.com"
+              className="text-blue-400 hover:text-blue-300 font-semibold underline underline-offset-2 transition-colors"
+            >
+              aictesafe.org@gmail.com
+            </a>
+          </p>
+        </div>
       </div>
 
       {/* Onboarding Modal */}

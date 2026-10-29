@@ -415,9 +415,9 @@ export const Landing: React.FC = () => {
           <div>
             <h4 className="text-white font-semibold text-xs mb-3 uppercase tracking-wider">Statutory Bureau</h4>
             <p className="text-slate-400 text-xs leading-relaxed">
-              Bureau of Approval, AICTE Headquarters<br />
-              Nelson Mandela Marg, Vasant Kunj<br />
-              New Delhi - 110070
+              Guru Gobind Singh Indraprastha University<br />
+              East Delhi Campus, Near Surajmal Vihar<br />
+              New Delhi - 110032
             </p>
           </div>
 

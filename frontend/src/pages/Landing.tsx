@@ -19,11 +19,30 @@ import {
   Mail,
   ChevronRight,
   Sparkles,
+  ZoomIn,
+  ZoomOut,
+  Wifi,
 } from 'lucide-react';
 import { InstitutionRequestModal } from '../components/InstitutionRequestModal';
 
 export const Landing: React.FC = () => {
   const { user } = useAuth();
+
+  // Zoom feature state (80% to 150%)
+  const [zoomLevel, setZoomLevel] = useState<number>(100);
+  const [dataSaver, setDataSaver] = useState<boolean>(false);
+
+  const handleZoomIn = () => {
+    setZoomLevel((prev) => Math.min(prev + 10, 140));
+  };
+
+  const handleZoomOut = () => {
+    setZoomLevel((prev) => Math.max(prev - 10, 80));
+  };
+
+  const handleResetZoom = () => {
+    setZoomLevel(100);
+  };
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -78,12 +97,57 @@ export const Landing: React.FC = () => {
 
           {/* Navigation & Portal Entry Actions */}
           <div className="flex items-center gap-3">
+            {/* Data-Saver Pill Button */}
+            <button
+              onClick={() => setDataSaver(!dataSaver)}
+              className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                dataSaver
+                  ? 'bg-[#30d158]/15 border-[#30d158]/40 text-[#30d158]'
+                  : 'bg-white/5 border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20'
+              }`}
+              title="Toggle Data-Saver Mode"
+            >
+              <Wifi className="w-3.5 h-3.5" />
+              <span>Data-Saver</span>
+            </button>
+
+            {/* Interactive Zoom Control Widget (Exact Match to Capacity Connect) */}
+            <div className="flex items-center bg-black/60 border border-white/15 rounded-full p-0.5 shadow-inner">
+              <button
+                onClick={handleZoomOut}
+                disabled={zoomLevel <= 80}
+                className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 transition-colors rounded-full hover:bg-white/10"
+                title="Zoom Out"
+                aria-label="Zoom Out"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                onClick={handleResetZoom}
+                className="px-2 text-xs font-mono font-semibold text-slate-200 hover:text-[#2997ff] transition-colors select-none"
+                title="Click to reset to 100%"
+              >
+                {zoomLevel}%
+              </button>
+
+              <button
+                onClick={handleZoomIn}
+                disabled={zoomLevel >= 140}
+                className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-white disabled:opacity-30 disabled:hover:text-slate-400 transition-colors rounded-full hover:bg-white/10"
+                title="Zoom In"
+                aria-label="Zoom In"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
             <button
               onClick={() => setIsOnboardingModalOpen(true)}
-              className="hidden sm:inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-300 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-white/20"
+              className="hidden lg:inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-300 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-white/20"
             >
               <Building2 className="w-4 h-4 text-[#2997ff]" />
-              <span>Institute Onboarding</span>
+              <span>Onboarding</span>
             </button>
 
             {user ? (
@@ -91,21 +155,30 @@ export const Landing: React.FC = () => {
                 to="/dashboard"
                 className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-[#0071e3] hover:bg-[#2997ff] rounded-xl shadow-[0_0_20px_rgba(0,113,227,0.4)] transition-all hover:scale-[1.02]"
               >
-                <span>Go to Dashboard</span>
+                <span>Dashboard</span>
                 <ArrowRight className="w-4 h-4" />
               </Link>
             ) : (
               <Link
                 to="/login"
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-[#0071e3] to-[#2997ff] hover:opacity-95 rounded-xl shadow-[0_0_20px_rgba(0,113,227,0.3)] transition-all hover:scale-[1.02]"
+                className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-[#0071e3] hover:bg-[#2997ff] rounded-xl shadow-[0_0_20px_rgba(0,113,227,0.4)] transition-all hover:scale-[1.02]"
               >
-                <Lock className="w-3.5 h-3.5" />
-                <span>Portal Sign In</span>
+                <span>Sign In</span>
               </Link>
             )}
           </div>
         </div>
       </header>
+
+      {/* Main Zoomable Content Canvas */}
+      <main
+        style={{
+          zoom: `${zoomLevel}%`,
+          transformOrigin: 'top center',
+          transition: 'zoom 0.15s ease-out'
+        }}
+        className="flex-1 flex flex-col"
+      >
 
       {/* 3. Hero Section */}
       <section className="py-20 px-4 sm:px-8 relative">
@@ -387,6 +460,7 @@ export const Landing: React.FC = () => {
           </div>
         </div>
       </footer>
+      </main>
 
       {/* Onboarding Modal */}
       <InstitutionRequestModal

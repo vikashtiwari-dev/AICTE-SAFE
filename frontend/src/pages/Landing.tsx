@@ -60,25 +60,6 @@ export const Landing: React.FC = () => {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[400px] bg-gradient-to-b from-[#0071e3]/15 via-[#2997ff]/5 to-transparent blur-3xl pointer-events-none -z-10" />
       <div className="absolute top-[600px] left-1/4 w-[500px] h-[300px] bg-[#bf5af2]/5 blur-3xl pointer-events-none -z-10" />
 
-      {/* 1. National Top Strip */}
-      <div className="bg-[#0b0b0d] text-slate-400 text-xs py-2 px-4 sm:px-6 lg:px-8 border-b border-white/5">
-        <div className="w-full flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#30d158] animate-pulse"></span>
-              <span className="font-semibold text-slate-200">Government of India</span>
-            </span>
-            <span className="hidden md:inline text-slate-700">•</span>
-            <span className="hidden md:inline text-slate-400">Ministry of Education</span>
-          </div>
-          <div className="flex items-center gap-4 text-[11px]">
-            <a href="#verification" className="hover:text-white transition-colors">Public Verification</a>
-            <a href="#aph" className="hover:text-white transition-colors">APH Mandate</a>
-            <a href="#helpdesk" className="hover:text-white transition-colors">Helpdesk</a>
-          </div>
-        </div>
-      </div>
-
       {/* 2. Sleek Glassmorphism Header */}
       <header className="sticky top-0 z-40 bg-[#06070a]/80 backdrop-blur-md border-b border-white/10">
         <div className="w-full px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">

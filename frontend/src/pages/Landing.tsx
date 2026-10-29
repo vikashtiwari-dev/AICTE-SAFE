@@ -66,10 +66,10 @@ export const Landing: React.FC = () => {
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-[#30d158] animate-pulse"></span>
-              <span className="font-semibold text-slate-200">भारत सरकार | Government of India</span>
+              <span className="font-semibold text-slate-200">Government of India</span>
             </span>
             <span className="hidden md:inline text-slate-700">•</span>
-            <span className="hidden md:inline text-slate-400">शिक्षा मंत्रालय (Ministry of Education)</span>
+            <span className="hidden md:inline text-slate-400">Ministry of Education</span>
           </div>
           <div className="flex items-center gap-4 text-[11px]">
             <a href="#verification" className="hover:text-white transition-colors">Public Verification</a>
@@ -88,13 +88,8 @@ export const Landing: React.FC = () => {
               <ShieldCheck className="w-6 h-6 text-[#2997ff]" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xl font-extrabold tracking-tight text-white">AICTE SAFE</span>
-                <span className="bg-[#0071e3]/20 text-[#2997ff] text-[10px] font-bold px-2 py-0.5 rounded-md border border-[#0071e3]/30">
-                  NATIONAL PORTAL
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 font-medium">अखिल भारतीय तकनीकी शिक्षा परिषद</p>
+              <span className="text-xl font-extrabold tracking-tight text-white block">AICTE SAFE</span>
+              <p className="text-xs text-slate-400 font-medium">All India Council for Technical Education</p>
             </div>
           </div>
 
@@ -132,11 +127,6 @@ export const Landing: React.FC = () => {
       {/* 3. Hero Section */}
       <section className="py-20 px-4 sm:px-8 relative">
         <div className="max-w-4xl mx-auto text-center space-y-6">
-          <div className="inline-flex items-center gap-2 bg-[#0071e3]/10 border border-[#0071e3]/30 text-[#2997ff] px-4 py-1.5 rounded-full text-xs font-semibold backdrop-blur-md">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Statutory Deposit Custodian • Approval Process Handbook (APH 2024–27)</span>
-          </div>
-
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-[1.15]">
             Centralized Fixed Deposit & <br />
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#60a5fa] to-[#a855f7]">

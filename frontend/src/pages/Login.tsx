@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { InstitutionRequestModal } from '../components/InstitutionRequestModal';
 
-type RoleTab = 'institution' | 'officer' | 'admin';
+type RoleTab = 'institution' | 'bank_verifier' | 'aicte_bureau';
 
 export const Login: React.FC = () => {
   const [selectedRole, setSelectedRole] = useState<RoleTab>('institution');
@@ -55,12 +55,12 @@ export const Login: React.FC = () => {
     if (role === 'institution') {
       setUsername('inst_user1');
       setPassword('inst123');
-    } else if (role === 'officer') {
+    } else if (role === 'bank_verifier') {
+      setUsername('viewer1');
+      setPassword('viewer123');
+    } else {
       setUsername('officer1');
       setPassword('officer123');
-    } else {
-      setUsername('admin');
-      setPassword('admin123');
     }
   };
 
@@ -105,8 +105,8 @@ export const Login: React.FC = () => {
 
   const getRoleButtonLabel = () => {
     if (selectedRole === 'institution') return 'Sign In as Institution';
-    if (selectedRole === 'officer') return 'Sign In as Officer';
-    return 'Sign In as Administrator';
+    if (selectedRole === 'bank_verifier') return 'Sign In as Bank Verifier';
+    return 'Sign In as AICTE Bureau';
   };
 
   return (
@@ -116,18 +116,18 @@ export const Login: React.FC = () => {
       <div className="absolute bottom-10 left-1/3 w-[400px] h-[250px] bg-[#bf5af2]/5 blur-3xl pointer-events-none -z-10" />
 
       {/* Subtitle Header */}
-      <div className="w-full max-w-[460px] text-center mb-4">
+      <div className="w-full max-w-[480px] text-center mb-4">
         <p className="text-xs font-medium text-slate-400">Secure role-based authentication</p>
       </div>
 
       {/* Main Glassmorphism Card */}
-      <div className="w-full max-w-[460px] bg-[#0c0d14]/90 border border-white/10 rounded-3xl p-6 sm:p-7 shadow-[0_25px_60px_rgba(0,0,0,0.8)] backdrop-blur-2xl relative">
-        {/* Role Tab Selector (Trainee / Trainer / Admin -> Institution / Officer / Admin) */}
-        <div className="grid grid-cols-3 bg-[#06070a] p-1 rounded-2xl border border-white/5 mb-6">
+      <div className="w-full max-w-[480px] bg-[#0c0d14]/90 border border-white/10 rounded-3xl p-6 sm:p-7 shadow-[0_25px_60px_rgba(0,0,0,0.8)] backdrop-blur-2xl relative">
+        {/* Role Tab Selector (Institution / Bank Verifier / AICTE Bureau) */}
+        <div className="grid grid-cols-3 bg-[#06070a] p-1 rounded-2xl border border-white/5 mb-6 text-center gap-1">
           <button
             type="button"
             onClick={() => handleRoleChange('institution')}
-            className={`py-2 px-3 text-xs font-semibold rounded-xl transition-all ${
+            className={`py-2 px-2 text-xs font-semibold rounded-xl transition-all truncate ${
               selectedRole === 'institution'
                 ? 'bg-[#0071e3] text-white shadow-[0_0_15px_rgba(0,113,227,0.4)]'
                 : 'text-slate-400 hover:text-slate-200'
@@ -137,25 +137,25 @@ export const Login: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => handleRoleChange('officer')}
-            className={`py-2 px-3 text-xs font-semibold rounded-xl transition-all ${
-              selectedRole === 'officer'
+            onClick={() => handleRoleChange('bank_verifier')}
+            className={`py-2 px-2 text-xs font-semibold rounded-xl transition-all truncate ${
+              selectedRole === 'bank_verifier'
                 ? 'bg-[#0071e3] text-white shadow-[0_0_15px_rgba(0,113,227,0.4)]'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Officer
+            Bank Verifier
           </button>
           <button
             type="button"
-            onClick={() => handleRoleChange('admin')}
-            className={`py-2 px-3 text-xs font-semibold rounded-xl transition-all ${
-              selectedRole === 'admin'
+            onClick={() => handleRoleChange('aicte_bureau')}
+            className={`py-2 px-2 text-xs font-semibold rounded-xl transition-all truncate ${
+              selectedRole === 'aicte_bureau'
                 ? 'bg-[#0071e3] text-white shadow-[0_0_15px_rgba(0,113,227,0.4)]'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            Admin
+            AICTE Bureau
           </button>
         </div>
 

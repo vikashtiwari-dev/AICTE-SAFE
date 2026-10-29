@@ -413,7 +413,7 @@ export const Landing: React.FC = () => {
           </div>
 
           <div>
-            <h4 className="text-white font-semibold text-xs mb-3 uppercase tracking-wider">Statutory Bureau</h4>
+            <h4 className="text-white font-semibold text-xs mb-3 uppercase tracking-wider">Address</h4>
             <p className="text-slate-400 text-xs leading-relaxed">
               Guru Gobind Singh Indraprastha University<br />
               East Delhi Campus, Near Surajmal Vihar<br />

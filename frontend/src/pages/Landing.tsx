@@ -69,7 +69,9 @@ export const Landing: React.FC = () => {
               <ShieldCheck className="w-6 h-6 text-[#2997ff]" />
             </div>
             <div>
-              <span className="text-xl font-extrabold tracking-tight text-white block">AICTE SAFE</span>
+              <span className="text-xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#38bdf8] to-[#c084fc] block">
+                AICTE SAFE
+              </span>
               <p className="text-xs text-slate-400 font-medium">All India Council for Technical Education</p>
             </div>
           </div>
@@ -108,9 +110,13 @@ export const Landing: React.FC = () => {
       {/* 3. Hero Section */}
       <section className="py-20 px-4 sm:px-8 relative">
         <div className="max-w-4xl mx-auto text-center space-y-6">
-          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight leading-[1.1] text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#60a5fa] to-[#a855f7]">
-            AICTE SAFE
-          </h1>
+          <div className="relative inline-block">
+            {/* Ambient backlight glow directly behind heading */}
+            <div className="absolute inset-0 bg-gradient-to-r from-[#0071e3]/30 via-[#a855f7]/30 to-[#ec4899]/30 blur-2xl -z-10 rounded-full scale-110 pointer-events-none" />
+            <h1 className="text-6xl sm:text-7xl lg:text-8xl font-black tracking-tight leading-[1.08] text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#38bdf8] via-[#a855f7] to-[#f43f5e] drop-shadow-[0_10px_25px_rgba(0,113,227,0.3)] select-none">
+              AICTE SAFE
+            </h1>
+          </div>
 
           <p className="text-slate-400 text-sm sm:text-base max-w-2xl mx-auto leading-relaxed">
             AICTE-SAFE protects student and regulatory interests through automated tripartite verification of institutional security deposits with Scheduled Commercial Banks, SFMS messaging, and tamper-evident digital release certifications.

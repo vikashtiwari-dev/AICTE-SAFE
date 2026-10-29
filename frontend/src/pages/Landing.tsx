@@ -28,9 +28,8 @@ import { InstitutionRequestModal } from '../components/InstitutionRequestModal';
 export const Landing: React.FC = () => {
   const { user } = useAuth();
 
-  // Zoom feature state (80% to 150%)
+  // Zoom feature state (80% to 140%)
   const [zoomLevel, setZoomLevel] = useState<number>(100);
-  const [dataSaver, setDataSaver] = useState<boolean>(false);
 
   const handleZoomIn = () => {
     setZoomLevel((prev) => Math.min(prev + 10, 140));
@@ -97,20 +96,6 @@ export const Landing: React.FC = () => {
 
           {/* Navigation & Portal Entry Actions */}
           <div className="flex items-center gap-3">
-            {/* Data-Saver Pill Button */}
-            <button
-              onClick={() => setDataSaver(!dataSaver)}
-              className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-all ${
-                dataSaver
-                  ? 'bg-[#30d158]/15 border-[#30d158]/40 text-[#30d158]'
-                  : 'bg-white/5 border-white/10 text-slate-400 hover:text-slate-200 hover:border-white/20'
-              }`}
-              title="Toggle Data-Saver Mode"
-            >
-              <Wifi className="w-3.5 h-3.5" />
-              <span>Data-Saver</span>
-            </button>
-
             {/* Interactive Zoom Control Widget (Exact Match to Capacity Connect) */}
             <div className="flex items-center bg-black/60 border border-white/15 rounded-full p-0.5 shadow-inner">
               <button

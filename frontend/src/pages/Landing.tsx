@@ -127,11 +127,8 @@ export const Landing: React.FC = () => {
       {/* 3. Hero Section */}
       <section className="py-20 px-4 sm:px-8 relative">
         <div className="max-w-4xl mx-auto text-center space-y-6">
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-[1.15]">
-            Centralized Fixed Deposit & <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#60a5fa] to-[#a855f7]">
-              Joint-Lien Monitoring Engine
-            </span>
+          <h1 className="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight leading-[1.1] text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#60a5fa] to-[#a855f7]">
+            AICTE SAFE
           </h1>
 
           <p className="text-slate-400 text-sm sm:text-base max-w-2xl mx-auto leading-relaxed">

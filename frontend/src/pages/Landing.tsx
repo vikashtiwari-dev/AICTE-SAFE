@@ -61,8 +61,8 @@ export const Landing: React.FC = () => {
       <div className="absolute top-[600px] left-1/4 w-[500px] h-[300px] bg-[#bf5af2]/5 blur-3xl pointer-events-none -z-10" />
 
       {/* 1. National Top Strip */}
-      <div className="bg-[#0b0b0d] text-slate-400 text-xs py-2 px-4 sm:px-8 border-b border-white/5">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+      <div className="bg-[#0b0b0d] text-slate-400 text-xs py-2 px-4 sm:px-6 lg:px-8 border-b border-white/5">
+        <div className="w-full flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-[#30d158] animate-pulse"></span>
@@ -81,8 +81,8 @@ export const Landing: React.FC = () => {
 
       {/* 2. Sleek Glassmorphism Header */}
       <header className="sticky top-0 z-40 bg-[#06070a]/80 backdrop-blur-md border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-8 h-20 flex items-center justify-between">
-          {/* Logo & Bureau Titles */}
+        <div className="w-full px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+          {/* Logo & Bureau Titles (Pressed to Left-Most Side) */}
           <div className="flex items-center gap-3.5">
             <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#0071e3] to-[#004fb0] text-white flex items-center justify-center shadow-[0_0_20px_rgba(0,113,227,0.4)] border border-white/20 shrink-0">
               <ShieldCheck className="w-6 h-6 text-[#2997ff]" />

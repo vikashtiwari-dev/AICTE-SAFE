@@ -83,9 +83,6 @@ export const Landing: React.FC = () => {
         <div className="w-full px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
           {/* Logo & Bureau Titles (Pressed to Left-Most Side) */}
           <div className="flex items-center gap-3.5">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#0071e3] to-[#004fb0] text-white flex items-center justify-center shadow-[0_0_20px_rgba(0,113,227,0.4)] border border-white/20 shrink-0">
-              <ShieldCheck className="w-6 h-6 text-[#2997ff]" />
-            </div>
             <div>
               <span className="text-xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-[#2997ff] via-[#38bdf8] to-[#c084fc] block">
                 AICTE SAFE
@@ -404,7 +401,6 @@ export const Landing: React.FC = () => {
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
           <div>
             <div className="flex items-center gap-2 mb-3">
-              <ShieldCheck className="w-5 h-5 text-[#2997ff]" />
               <span className="text-white font-bold text-sm">AICTE SAFE PORTAL</span>
             </div>
             <p className="text-slate-400 text-xs leading-relaxed">

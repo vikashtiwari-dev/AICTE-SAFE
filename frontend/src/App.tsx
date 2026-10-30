@@ -15,7 +15,15 @@ import { Releases } from './pages/Releases';
 import { Reports } from './pages/Reports';
 import { Invocations } from './pages/Invocations';
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000, // 1 minute stale time to prevent repetitive re-fetching
+      refetchOnWindowFocus: false, // Don't freeze UI whenever user switches tabs
+      retry: 1,
+    },
+  },
+});
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();

@@ -24,8 +24,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (savedToken && savedUser) {
       try {
         setToken(savedToken);
-        setUser(JSON.parse(savedUser));
-        // Verify token in background
+        const parsed = JSON.parse(savedUser);
+        setUser(parsed);
+        setIsLoading(false); // Unblock UI immediately with cached credentials
+
+        // Verify/refresh token asynchronously in background without blocking initial render
         api.get('/auth/me')
           .then((res) => {
             setUser(res.data);
@@ -33,8 +36,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           })
           .catch(() => {
             logout();
-          })
-          .finally(() => setIsLoading(false));
+          });
       } catch {
         logout();
         setIsLoading(false);

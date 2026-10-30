@@ -32,9 +32,6 @@ export const Sidebar: React.FC = () => {
     <aside className="w-64 bg-slate-900 border-r border-slate-800 text-slate-300 flex flex-col shrink-0 h-screen sticky top-0">
       {/* Brand Header */}
       <div className="p-5 border-b border-slate-800 flex items-center gap-3 bg-slate-950">
-        <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-md">
-          <ShieldCheck className="w-6 h-6" />
-        </div>
         <div>
           <h1 className="text-base font-bold text-white tracking-wide">AICTE SAFE</h1>
           <p className="text-[10px] text-blue-400 font-semibold tracking-wider uppercase">

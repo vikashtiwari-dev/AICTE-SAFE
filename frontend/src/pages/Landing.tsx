@@ -217,8 +217,8 @@ export const Landing: React.FC = () => {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder=""
-                className="w-full px-4 py-3 rounded-xl border border-white/10 bg-[#06070a] text-white text-sm focus:outline-hidden focus:ring-2 focus:ring-[#0071e3] focus:border-[#0071e3] transition-all font-mono placeholder:text-slate-600"
+                placeholder="Permanent Institute ID"
+                className="w-full px-4 py-3 rounded-xl border border-white/10 bg-[#06070a] text-white text-sm focus:outline-hidden focus:ring-2 focus:ring-[#0071e3] focus:border-[#0071e3] transition-all font-mono placeholder:text-slate-500"
               />
             </div>
             <button

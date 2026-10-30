@@ -72,6 +72,7 @@ router.post('/login', authLimiter, async (req, res) => {
       },
     });
   } catch (err: any) {
+    console.error('CRITICAL /api/auth/login error:', err);
     return res.status(500).json(sanitizeError(err, 'Authentication processing error'));
   }
 });

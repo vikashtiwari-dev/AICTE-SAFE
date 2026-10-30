@@ -176,12 +176,6 @@ export const Landing: React.FC = () => {
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
             <a
-              href="#about"
-              className="inline-flex items-center gap-2 px-6 py-3 text-sm font-bold text-white bg-white/10 hover:bg-white/15 border border-white/15 rounded-xl transition-all hover:scale-[1.02]"
-            >
-              <span>About AICTE SAFE</span>
-            </a>
-            <a
               href="#verification"
               className="inline-flex items-center gap-2 px-6 py-3 text-sm font-bold text-white bg-[#0071e3] hover:bg-[#2997ff] rounded-xl shadow-[0_0_25px_rgba(0,113,227,0.5)] transition-all hover:scale-[1.02]"
             >
@@ -195,55 +189,6 @@ export const Landing: React.FC = () => {
               <Lock className="w-4 h-4 text-[#2997ff]" />
               <span>Authorized Official Access</span>
             </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* About AICTE SAFE Section */}
-      <section id="about" className="py-16 px-4 sm:px-8 border-y border-white/5 bg-[#08090e]">
-        <div className="max-w-7xl mx-auto space-y-12">
-          <div className="text-center max-w-3xl mx-auto space-y-3">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#0071e3]/10 border border-[#0071e3]/30 text-[#2997ff] text-xs font-semibold uppercase tracking-wider">
-              <span>National Regulatory Infrastructure</span>
-            </div>
-            <h2 className="text-3xl sm:text-4xl font-black text-white tracking-tight">
-              About AICTE SAFE
-            </h2>
-            <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
-              <span className="text-white font-semibold">AICTE SAFE</span> (<span className="text-[#2997ff] font-semibold">S</span>ecure <span className="text-[#2997ff] font-semibold">A</span>utomated <span className="text-[#2997ff] font-semibold">F</span>DR & <span className="text-[#2997ff] font-semibold">D</span>eposit <span className="text-[#2997ff] font-semibold">E</span>ngine) is the official digital regulatory platform developed for the All India Council for Technical Education (AICTE) under the Smart India Hackathon framework.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="p-6 rounded-2xl bg-[#0c0d14] border border-white/10 hover:border-[#0071e3]/40 transition-all space-y-3">
-              <div className="w-12 h-12 rounded-xl bg-[#0071e3]/15 text-[#2997ff] flex items-center justify-center font-bold text-lg border border-[#0071e3]/20">
-                <Landmark className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-white">Tripartite Institutional Custody</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Connects Approved Technical Institutions, Scheduled Commercial Banks, and the AICTE Bureau of Approval into a unified, authenticated digital ecosystem. It eliminates paper register backlogs and ensures joint-lien undertakings are registered directly in core banking databases.
-              </p>
-            </div>
-
-            <div className="p-6 rounded-2xl bg-[#0c0d14] border border-white/10 hover:border-[#38bdf8]/40 transition-all space-y-3">
-              <div className="w-12 h-12 rounded-xl bg-[#38bdf8]/15 text-[#38bdf8] flex items-center justify-center font-bold text-lg border border-[#38bdf8]/20">
-                <FileCheck2 className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-white">Automated OCR & Verification</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Utilizes intelligent optical character recognition to extract FDR deposit numbers, maturity timelines, amounts, and lien annotations directly from uploaded banking certificates, scoring compliance against Approval Process Handbook (APH) regulations in seconds.
-              </p>
-            </div>
-
-            <div className="p-6 rounded-2xl bg-[#0c0d14] border border-white/10 hover:border-[#bf5af2]/40 transition-all space-y-3">
-              <div className="w-12 h-12 rounded-xl bg-[#bf5af2]/15 text-[#bf5af2] flex items-center justify-center font-bold text-lg border border-[#bf5af2]/20">
-                <Scale className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-white">Tamper-Evident Security & NOC</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Guarantees complete regulatory transparency through a cryptographic SHA-256 chained audit ledger. Generates QR-verifiable digital No-Objection Release Certificates, preventing premature unauthorized encashment and safeguarding student & faculty endowment funds.
-              </p>
-            </div>
           </div>
         </div>
       </section>

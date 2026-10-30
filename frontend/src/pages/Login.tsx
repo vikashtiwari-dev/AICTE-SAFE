@@ -238,11 +238,14 @@ export const Login: React.FC = () => {
             <div className="flex items-center gap-2">
               {/* Visual Distorted Code Badge */}
               <div
-                className="h-10 px-4 rounded-xl bg-gradient-to-r from-slate-950 via-slate-900 to-black border border-white/15 flex items-center justify-center font-mono text-base font-bold tracking-[0.25em] select-none text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-pink-400 to-amber-300 relative overflow-hidden shrink-0 shadow-inner"
-                style={{ textShadow: '0 0 10px rgba(0,255,255,0.3)' }}
+                className="h-10 px-4 rounded-xl bg-slate-900/90 border border-cyan-400/30 flex items-center justify-center font-mono text-lg font-black tracking-[0.32em] select-none text-cyan-300 relative overflow-hidden shrink-0 shadow-lg"
+                style={{
+                  textShadow: '0 0 12px rgba(6,182,212,0.8), 0 0 2px rgba(255,255,255,0.9)',
+                  letterSpacing: '0.28em'
+                }}
               >
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.1)_1px,transparent_1px)] bg-[length:6px_6px] pointer-events-none opacity-40"></div>
-                {captchaCode}
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(56,189,248,0.15)_1px,transparent_1px)] bg-[length:5px_5px] pointer-events-none"></div>
+                <span className="relative z-10 text-cyan-300 font-extrabold">{captchaCode}</span>
               </div>
 
               {/* Refresh button */}

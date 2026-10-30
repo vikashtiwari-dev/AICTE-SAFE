@@ -129,7 +129,7 @@ export const Landing: React.FC = () => {
               className="hidden lg:inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-300 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 hover:border-white/20"
             >
               <Building2 className="w-4 h-4 text-[#2997ff]" />
-              <span>Onboarding</span>
+              <span>New Institute Registration</span>
             </button>
 
             {user ? (

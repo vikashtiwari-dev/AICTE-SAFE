@@ -774,7 +774,7 @@ export async function initializeDatabase() {
           VALUES
             (1, 'admin', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'System Administrator', 'admin@aicte.gov.in', 'admin', null, 1),
             (2, 'officer1', '$2a$10$uzbVo9BNwEYt.j0hSP/S/.XEnWxJvZxHJgv.jWBV/g22Rxk5xGxnG', 'Rajesh Verma (Bureau Officer)', 'r.verma@aicte.gov.in', 'bureau_officer', null, 1),
-            (3, 'inst_user1', '$2a$10$qDZDEZaL57uC6vGtPwmwXurLJPn/Zz8pfmJWu/oUnrV5DUEm9QYRa', 'IIT Bombay Finance Officer', 'finance@iitb.ac.in', 'institution_user', 1, 1),
+            (3, 'inst_user1', '$2a$10$Kv/Keazs5/Y3UpfPIBzUNeJ4fmT2VIhGF/mOq/0VKt7mBRxmtDs8.', 'IIT Bombay Finance Officer', 'finance@iitb.ac.in', 'institution_user', 1, 1),
             (4, 'viewer1', '$2a$10$QLszhaR6SX6rA1wyDn5w9.1czXkAM/5ARkegWxQhy3YCDSTytMvl6', 'Auditor General / Viewer', 'viewer@aicte.gov.in', 'viewer', null, 1)
           ON CONFLICT (id) DO NOTHING;
         `);

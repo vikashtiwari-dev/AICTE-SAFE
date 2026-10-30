@@ -125,14 +125,14 @@ router.get('/public-verify', verificationLimiter, async (req, res) => {
       SELECT 
         f.fdr_number,
         f.bank_name,
-        f.branch_name,
+        f.bank_branch,
         f.deposit_amount,
         f.issue_date,
         f.maturity_date,
         f.status,
         f.verification_status,
-        f.joint_lien_undertaking,
         f.deposit_type,
+        f.purpose,
         i.name as institution_name,
         i.aicte_id,
         i.state,
@@ -155,6 +155,12 @@ router.get('/public-verify', verificationLimiter, async (req, res) => {
       ? fdr.fdr_number.substring(0, 3) + '••••' + fdr.fdr_number.substring(fdr.fdr_number.length - 2)
       : '••••';
 
+    const isLienConfirmed = Boolean(
+      fdr.verification_status === 'Verified' || 
+      fdr.verification_status === 'BANK_CONFIRMED' || 
+      (fdr.purpose && fdr.purpose.toLowerCase().includes('lien'))
+    );
+
     return res.json({
       found: true,
       data: {
@@ -162,13 +168,13 @@ router.get('/public-verify', verificationLimiter, async (req, res) => {
         institution_name: fdr.institution_name,
         aicte_id: fdr.aicte_id,
         bank_name: fdr.bank_name,
-        branch_name: fdr.branch_name,
+        branch_name: fdr.bank_branch,
         deposit_type: fdr.deposit_type,
         issue_date: fdr.issue_date,
         maturity_date: fdr.maturity_date,
         status: fdr.status,
         verification_status: fdr.verification_status,
-        has_joint_lien: Boolean(fdr.joint_lien_undertaking),
+        has_joint_lien: isLienConfirmed,
         location: `${fdr.city || ''}, ${fdr.state || ''}`.replace(/^,\s*|,\s*$/g, '')
       }
     });

@@ -72,8 +72,27 @@ export const Login: React.FC = () => {
 
   const speakCaptcha = () => {
     if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(captchaCode.split('').join(' '));
-      utterance.rate = 0.8;
+      window.speechSynthesis.cancel(); // Stop any pending speech
+      
+      // Describe each character clearly with case specification
+      const spokenText = captchaCode
+        .split('')
+        .map((char) => {
+          if (/[A-Z]/.test(char)) {
+            return `capital ${char}`;
+          } else if (/[a-z]/.test(char)) {
+            return `small ${char}`;
+          } else if (/[0-9]/.test(char)) {
+            return `number ${char}`;
+          }
+          return char;
+        })
+        .join(', ');
+
+      const utterance = new SpeechSynthesisUtterance(`Captcha is: ${spokenText}`);
+      utterance.rate = 0.75;
+      utterance.pitch = 1.0;
+      utterance.lang = 'en-US';
       window.speechSynthesis.speak(utterance);
     }
   };
